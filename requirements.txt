@@ -1,0 +1,58 @@
+# Deep Learning Framework
+torch==2.8.0
+torchvision
+timm
+
+# Data Processing
+numpy
+pandas
+Pillow
+scikit-learn
+scipy
+tqdm
+
+# Image Processing
+opencv-python
+scikit-image
+
+# File formats
+pyarrow
+fastparquet
+datasets
+
+# Experiment tracking and visualization
+wandb
+tensorboard
+
+# Configuration management
+pyyaml
+
+# HTTP requests
+requests
+
+# Configuration
+PyYAML
+
+# Progress bars
+tqdm
+
+# Visualization
+matplotlib
+seaborn
+
+# Optional: for better performance
+matplotlib
+seaborn
+
+# Computer Vision
+opencv-python
+
+# Optional dependencies for advanced features
+# wandb>=0.12.0  # For experiment tracking (uncomment if needed)
+umap-learn>=0.5.0  # For UMAP visualization
+# tensorboard>=2.10.0  # For TensorBoard logging (uncomment if needed)
+ptflops  # For FLOPs computation
+
+stable-retro
+stable-baselines3[extra]
+imageio
