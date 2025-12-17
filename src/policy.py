@@ -18,11 +18,6 @@ class VisionBackboneExtractor(BaseFeaturesExtractor):
         channels, height, width = observation_space.shape
         # Temporary value, will be updated after backbone is created
         super().__init__(observation_space, features_dim=1)
-        #######################################
-        # 使用 resnet18 作為視覺特徵提取器
-        # pretrained=True: 使用 ImageNet 預訓練權重加速收斂
-        # features_only=True: 只取特徵層，不要分類頭
-        #######################################
         self.backbone = timm.create_model(
             "resnet18", # convnext_small.dinov3_lvd1689m, convnext_base.clip_laion2b
             pretrained=True,
@@ -41,6 +36,34 @@ class VisionBackboneExtractor(BaseFeaturesExtractor):
         return pooled
 
 
+class ScalarAttentionEncoder(nn.Module):
+    def __init__(self, input_dim: int, embed_dim: int = 32, num_heads: int = 4, num_layers: int = 2, output_dim: int = 64):
+        super().__init__()
+        self.embed_dim = embed_dim
+        # 將每個 scalar 特徵視為一個 token，投影到 embed_dim
+        self.feature_embedding = nn.Linear(1, embed_dim)
+        
+        encoder_layer = nn.TransformerEncoderLayer(d_model=embed_dim, nhead=num_heads, batch_first=True)
+        self.transformer_encoder = nn.TransformerEncoder(encoder_layer, num_layers=num_layers)
+        
+        self.output_net = nn.Sequential(
+            nn.Flatten(),
+            nn.Linear(input_dim * embed_dim, output_dim),
+            nn.ReLU()
+        )
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        # x shape: (Batch, input_dim)
+        # Reshape to (Batch, input_dim, 1)
+        x = x.unsqueeze(-1)
+        # Embedding: (Batch, input_dim, embed_dim)
+        x = self.feature_embedding(x)
+        # Transformer Encoder
+        x = self.transformer_encoder(x)
+        # Output projection
+        return self.output_net(x)
+
+
 class VisionScalarExtractor(BaseFeaturesExtractor):
     def __init__(self, observation_space: spaces.Dict):
         assert isinstance(observation_space, spaces.Dict), "VisionScalarExtractor expects a Dict observation space"
@@ -54,12 +77,8 @@ class VisionScalarExtractor(BaseFeaturesExtractor):
         # 輸入維度: scalar_dim (2: step_feat, time_feat)
         # 輸出維度: 64，與 image features 拼接
         ######################################
-        self.scalar_net = nn.Sequential(
-            nn.Linear(scalar_dim, 32),
-            nn.ReLU(),
-            nn.Linear(32, 64),
-            nn.ReLU(),
-        )
+        # 使用 Attention Encoder 處理 scalar 輸入
+        self.scalar_net = ScalarAttentionEncoder(input_dim=scalar_dim, output_dim=64)
         ######################################
         ######################################
         self._features_dim = self.image_extractor.features_dim + 64
