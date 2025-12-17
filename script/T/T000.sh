@@ -1,6 +1,6 @@
 #!/bin/bash
 #PBS -P rp06
-#PBS -q gpuvolta
+#PBS -q gpuhopper
 #PBS -l ngpus=1            
 #PBS -l ncpus=12            
 #PBS -l mem=32GB           
