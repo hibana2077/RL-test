@@ -16,4 +16,5 @@ export HF_HOME="/scratch/rp06/sl5952/RL-test/.cache"
 export HF_HUB_OFFLINE=1
 
 cd ../..
+python3 -m retro.import ./roms
 python3 src/main.py >> T000.log 2>&1
