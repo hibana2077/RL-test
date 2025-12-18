@@ -1,8 +1,8 @@
 #!/bin/bash
 #PBS -P rp06
-#PBS -q gpuhopper
-#PBS -l ngpus=1            
-#PBS -l ncpus=12            
+#PBS -q dgxa100
+#PBS -l ngpus=1
+#PBS -l ncpus=16
 #PBS -l mem=32GB           
 #PBS -l walltime=10:00:00  
 #PBS -l wd                  
