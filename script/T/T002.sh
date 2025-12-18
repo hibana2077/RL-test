@@ -35,6 +35,7 @@ python3 src/main.py \
 	--eval-max-steps 6000 \
 	--record-steps 3000 \
 	--backbone "convnext_small.dinov3_lvd1689m" \
+	--reward-scale 0.01 \
 	--log-dir "./runs_T002" \
 	--device "cuda:0" \
 	>> T002.log 2>&1

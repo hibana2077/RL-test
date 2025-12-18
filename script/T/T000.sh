@@ -1,6 +1,6 @@
 #!/bin/bash
 #PBS -P rp06
-#PBS -q gpuhopper
+#PBS -q gpuvolta
 #PBS -l ngpus=1            
 #PBS -l ncpus=12            
 #PBS -l mem=32GB           
@@ -34,6 +34,7 @@ python3 src/main.py \
 	--eval-episodes 2 \
 	--eval-max-steps 6000 \
 	--record-steps 3000 \
+    --reward-scale 0.05 \
 	--log-dir "./runs_T000" \
 	--device "cuda:0" \
 	>> T000.log 2>&1
