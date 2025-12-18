@@ -277,19 +277,21 @@ class AuxObservationWrapper(gym.Wrapper):
 
 class RewardOverrideWrapper(gym.Wrapper):
     """
-        Dense reward shaping for Super Mario World.
+        Baseline reward (docs/rd_f.md):
 
-        目前 shaping 條件:
-        - 前進主 reward(唯一 dense): x_delta * distance_scale
-        - 新最遠位置 bonus(低頻事件): 刷新 max_x 時給 new_max_bonus (預設為小常數)
-        - 存活 reward 服從前進: 只有在 x_delta > 0 時才給 survival_reward
-        - 停滯 soft constraint: 超過 stagnation_threshold 後，縮小 forward reward(避免額外負獎勵疊加)
-        - 動作多樣性(小、短期): 最近 10 步動作種類 >= 4 時給 action_diversity_reward
-        - 終局型獎懲: win_reward / death_penalty 只在 episode 結束時套用
+        Per-step reward:
+            r = v + c + d
 
-        其餘項目(距離指數、每秒移動範圍懲罰、分數/金幣)預設關閉，僅供 debug/curriculum。
+        where:
+        - v = x1 - x0          (horizontal progress)
+        - c = clock0 - clock1  (time bonus; usually ticks once per second)
+        - d = death penalty    (applied on death step)
 
-        備註:若 info 沒有 x_pos(RAM 取不到),會 fallback 使用 env_reward + 多樣性,避免 reward 退化。
+        Then clip reward to [-15, 15] for stability.
+
+        Requirements:
+        - ExtraInfoWrapper provides info['x_pos'] and info['time_left'].
+        - LifeTerminationWrapper provides info['death']=True on death.
     """
 
     def __init__(
@@ -310,7 +312,7 @@ class RewardOverrideWrapper(gym.Wrapper):
         action_diversity_reward: float = 0.1,  # 獎勵使用不同動作
         
         # === 終局處理 ===
-        death_penalty: float = -250.0,       # 終局死亡懲罰(負值)
+        death_penalty: float = -15.0,        # baseline death penalty (rd_f.md)
         # (debug/curriculum) 死亡時根據距離給獎勵：預設關閉
         distance_on_death_bonus: float = 0.0,
 
@@ -334,49 +336,18 @@ class RewardOverrideWrapper(gym.Wrapper):
     ):
         super().__init__(env)
 
+        # Keep signature compatibility; only the following are used for baseline reward.
         self.reward_scale = float(reward_scale)
-        
-        self.distance_scale = distance_scale
-        self.distance_exp_bonus = distance_exp_bonus
-        self.new_max_bonus = new_max_bonus
-        self.survival_reward = survival_reward
-        self.survival_scaling = survival_scaling
-        self.action_diversity_reward = action_diversity_reward
-        self.death_penalty = death_penalty
-        self.distance_on_death_bonus = distance_on_death_bonus
+        self.death_penalty = float(death_penalty)
 
-        self.steps_per_second = max(int(steps_per_second), 1)
-        self.min_movement_range = float(min_movement_range)
-        self.movement_range_penalty = float(movement_range_penalty)
+        self._prev_x_pos: Optional[float] = None
+        self._prev_time_left: Optional[float] = None
 
-        self.stagnation_threshold = stagnation_threshold
-        self.forward_reward_scale_when_stagnant = float(np.clip(forward_reward_scale_when_stagnant, 0.0, 1.0))
-        self.stagnation_penalty = stagnation_penalty
-        self.coin_reward = coin_reward
-        self.score_reward_scale = score_reward_scale
-        self.win_reward = win_reward
-        
-        # 追蹤變數
-        self._prev_x_pos = 0
-        self._prev_score = 0
-        self._prev_coins = 0
-        self._stagnation_counter = 0
-        self._max_x_pos = 0
-        self._step_count = 0
-        self._action_history = []
-        self._episode_total_distance = 0
-        self._x_pos_window = []
-
-    def _reset_trackers(self, info):
-        self._prev_x_pos = info.get("x_pos", 0)
-        self._prev_score = info.get("score", 0)
-        self._prev_coins = info.get("coins", 0)
-        self._stagnation_counter = 0
-        self._max_x_pos = info.get("x_pos", 0)
-        self._step_count = 0
-        self._action_history = []
-        self._episode_total_distance = 0
-        self._x_pos_window = []
+    def _reset_trackers(self, info: dict[str, Any]):
+        x_pos = info.get("x_pos", None)
+        time_left = info.get("time_left", None)
+        self._prev_x_pos = float(x_pos) if x_pos is not None else None
+        self._prev_time_left = float(time_left) if time_left is not None else None
 
     def reset(self, **kwargs):
         obs, info = self.env.reset(**kwargs)
@@ -390,143 +361,31 @@ class RewardOverrideWrapper(gym.Wrapper):
         if not isinstance(info, dict):
             info = {}
 
-        self._step_count += 1
+        # Baseline: r = v + c + d
         reward = 0.0
-        
-        # If x_pos is missing (e.g., RAM unavailable or address mismatch),
-        # fall back to the underlying env reward to avoid a degenerate constant-return signal.
+
+        # v = x1 - x0
         x_pos = info.get("x_pos", None)
-        if x_pos is None:
-            shaped = 0.0
+        if x_pos is not None:
+            x_pos_f = float(x_pos)
+            if self._prev_x_pos is not None:
+                reward += x_pos_f - float(self._prev_x_pos)
+            self._prev_x_pos = x_pos_f
 
-            # retain native reward when x_pos is unavailable
-            shaped += float(env_reward)
+        # c = clock0 - clock1
+        time_left = info.get("time_left", None)
+        if time_left is not None:
+            time_left_f = float(time_left)
+            if self._prev_time_left is not None:
+                reward += float(self._prev_time_left) - time_left_f
+            self._prev_time_left = time_left_f
 
-            # action diversity still applies
-            if isinstance(action, np.ndarray):
-                action_int = int(action[0]) if len(action.shape) > 0 else int(action)
-            else:
-                action_int = int(action)
-            self._action_history.append(action_int)
-            if len(self._action_history) > 20:
-                self._action_history.pop(0)
-            if len(self._action_history) >= 10:
-                unique_actions = len(set(self._action_history[-10:]))
-                if unique_actions >= 4:
-                    shaped += self.action_diversity_reward
+        # d = death penalty (on death step)
+        if info.get("death", False):
+            reward += self.death_penalty
 
-            if terminated or truncated:
-                self._reset_trackers(info)
-
-            shaped *= self.reward_scale
-            return obs, shaped, terminated, truncated, info
-
-        x_pos = float(x_pos)
-
-        # update 1-second x_pos window
-        self._x_pos_window.append(x_pos)
-        if len(self._x_pos_window) > self.steps_per_second:
-            self._x_pos_window.pop(0)
-
-        # ============ 1) 前進主 reward (唯一 dense) ============
-        x_delta = 0.0
-        if self._prev_x_pos is not None:
-            x_delta = float(x_pos - float(self._prev_x_pos))
-
-        forward_reward = 0.0
-        if x_delta > 0:
-            forward_reward = x_delta * float(self.distance_scale)
-            self._episode_total_distance += x_delta
-            self._stagnation_counter = 0
-        else:
-            self._stagnation_counter += 1
-
-        # 停滯 soft constraint：超過 threshold 後縮小 forward reward
-        if self._stagnation_counter > self.stagnation_threshold and forward_reward > 0:
-            forward_reward *= self.forward_reward_scale_when_stagnant
-
-        reward += forward_reward
-
-        # ============ 2) 新最遠位置 bonus (低頻事件，避免與 x_delta 雙倍計算) ============
-        if x_pos > self._max_x_pos:
-            reward += float(self.new_max_bonus)
-            self._max_x_pos = x_pos
-
-        # ============ 3) (debug/curriculum) 距離指數加成：預設關閉 ============
-        if self.distance_exp_bonus and x_pos > 50:
-            exp_bonus = (x_pos ** float(self.distance_exp_bonus)) * 0.00001
-            reward += float(min(exp_bonus, 5.0))
-
-        # ============ 4) 存活獎勵服從前進 ============
-        if x_delta > 0:
-            if self.survival_scaling:
-                survival = float(self.survival_reward) * (1.0 + self._step_count / 500.0)
-                reward += float(min(survival, 0.2))
-            else:
-                reward += float(self.survival_reward)
-
-        self._prev_x_pos = x_pos
-        
-        # ============ 3. 動作多樣性獎勵 ============
-        # 記錄最近 20 個動作,獎勵使用不同動作
-        # 將 action 轉為整數 (如果是 array)
-        if isinstance(action, np.ndarray):
-            action_int = int(action[0]) if len(action.shape) > 0 else int(action)
-        else:
-            action_int = int(action)
-        
-        self._action_history.append(action_int)
-        if len(self._action_history) > 20:
-            self._action_history.pop(0)
-        if len(self._action_history) >= 10:
-            unique_actions = len(set(self._action_history[-10:]))
-            if unique_actions >= 4:  # 使用了至少 4 種不同動作
-                reward += self.action_diversity_reward
-        
-        # ============ 4.5 停滯(額外負獎勵，僅供 debug/curriculum) ============
-        if self.stagnation_penalty != 0 and self._stagnation_counter > self.stagnation_threshold:
-            reward += float(self.stagnation_penalty)
-
-        # ============ 4.5 每秒移動範圍懲罰(強迫往前走) ============
-        # 以 steps_per_second 步近似 1 秒；若 1 秒內移動範圍不足則扣分。
-        if self.min_movement_range > 0 and self.movement_range_penalty > 0:
-            if len(self._x_pos_window) >= self.steps_per_second:
-                movement_range = float(max(self._x_pos_window) - min(self._x_pos_window))
-                if movement_range < self.min_movement_range:
-                    deficit_ratio = (self.min_movement_range - movement_range) / self.min_movement_range
-                    reward -= self.movement_range_penalty * float(np.clip(deficit_ratio, 0.0, 1.0))
-        
-        # ============ 5. 分數和金幣 ============
-        score = info.get("score", 0)
-        if self._prev_score is not None:
-            score_delta = score - self._prev_score
-            if score_delta > 0:
-                reward += score_delta * self.score_reward_scale
-        self._prev_score = score
-        
-        coins = info.get("coins", 0)
-        if self._prev_coins is not None:
-            coins_delta = coins - self._prev_coins
-            if coins_delta > 0:
-                reward += coins_delta * self.coin_reward
-        self._prev_coins = coins
-        
-        # ============ 6. 終局型獎懲(只在 episode 結束時套用) ============
-        if terminated or truncated:
-            if info.get("death", False):
-                reward += float(self.death_penalty)
-
-                # (debug/curriculum) 死亡時依距離給 bonus
-                if self.distance_on_death_bonus != 0:
-                    reward += float(self._max_x_pos) * float(self.distance_on_death_bonus)
-
-            # 通關：best-effort 用 x_pos 門檻判斷
-            if x_pos > 4800:
-                reward += float(self.win_reward)
-        
-        # Episode 結束
-        if terminated or truncated:
-            self._reset_trackers(info)
+        # clip to [-15, 15]
+        reward = float(np.clip(reward, -15.0, 15.0))
 
         reward *= self.reward_scale
         return obs, reward, terminated, truncated, info
