@@ -192,8 +192,16 @@ class CustomPPO(OnPolicyAlgorithm):
         entropy_losses = []
         pg_losses, value_losses = [], []
         clip_fractions = []
+        total_losses = []
+        grad_norms_pre_clip = []
         continue_training = True
         for epoch in range(self.n_epochs):
+            epoch_losses = []
+            epoch_grad_norms = []
+            epoch_pg_losses = []
+            epoch_value_losses = []
+            epoch_entropy_losses = []
+            epoch_clip_fractions = []
             approx_kl_divs = []
             for rollout_data in self.rollout_buffer.get(self.batch_size):
                 actions = rollout_data.actions
@@ -226,13 +234,16 @@ class CustomPPO(OnPolicyAlgorithm):
                 ##############################
                 # Logging
                 pg_losses.append(policy_loss.item())
+                epoch_pg_losses.append(policy_loss.item())
                 clip_fraction = torch.mean((torch.abs(ratio - 1) > self.clip_range).float()).item()
                 clip_fractions.append(clip_fraction)
+                epoch_clip_fractions.append(clip_fraction)
                 values_pred = values
                 
                 # Value loss using the TD(gae_lambda) target
                 value_loss = F.mse_loss(rollout_data.returns, values_pred)
                 value_losses.append(value_loss.item())
+                epoch_value_losses.append(value_loss.item())
                 # Entropy loss favor exploration
                 if entropy is None:
                     # Approximate entropy when no analytical form
@@ -240,6 +251,7 @@ class CustomPPO(OnPolicyAlgorithm):
                 else:
                     entropy_loss = -torch.mean(entropy)
                 entropy_losses.append(entropy_loss.item())
+                epoch_entropy_losses.append(entropy_loss.item())
                 
                 ################################
                 # 計算 KL Divergence 與總損失
@@ -266,33 +278,66 @@ class CustomPPO(OnPolicyAlgorithm):
                 ################################
                 self.policy.optimizer.zero_grad()
                 loss.backward()
-                
-                # === Debug: Check Gradients ===
+
+                # === Debug: Gradient norm (pre-clip) ===
                 total_norm = 0.0
                 for p in self.policy.parameters():
                     if p.grad is not None:
                         param_norm = p.grad.data.norm(2)
                         total_norm += param_norm.item() ** 2
                 total_norm = total_norm ** 0.5
-                if self._n_updates % 10 == 0:
-                    print(f"[DEBUG] Update {self._n_updates} | Loss: {loss.item():.4f} | Grad Norm: {total_norm:.4f}")
-                # ==============================
+                grad_norms_pre_clip.append(total_norm)
+                epoch_grad_norms.append(total_norm)
+                # ======================================
+
+                total_losses.append(loss.item())
+                epoch_losses.append(loss.item())
 
                 # Clip grad norm
                 torch.nn.utils.clip_grad_norm_(self.policy.parameters(), self.max_grad_norm)
                 self.policy.optimizer.step()
 
+            # Print once per epoch-update (not per minibatch)
+            if self._n_updates % 10 == 0:
+                def _mean(xs):
+                    return float(np.mean(xs)) if len(xs) else 0.0
+
+                print(
+                    "[DEBUG] Update "
+                    f"{self._n_updates} | "
+                    f"Loss(mean)={_mean(epoch_losses):.4f} | "
+                    f"PG={_mean(epoch_pg_losses):.4f} | "
+                    f"VF={_mean(epoch_value_losses):.4f} | "
+                    f"Ent={_mean(epoch_entropy_losses):.4f} | "
+                    f"KL={_mean(approx_kl_divs):.6f} | "
+                    f"ClipFrac={_mean(epoch_clip_fractions):.3f} | "
+                    f"GradNorm(preclip,mean)={_mean(epoch_grad_norms):.4f}"
+                )
+
             self._n_updates += 1
             if not continue_training:
                 break
         explained_variance_ = explained_variance(self.rollout_buffer.values.flatten(), self.rollout_buffer.returns.flatten())
+
+        # Scale diagnostics (helps interpret big value loss/loss)
+        returns = self.rollout_buffer.returns.flatten()
+        values_buf = self.rollout_buffer.values.flatten()
+        advantages_buf = self.rollout_buffer.advantages.flatten()
+
+        self.logger.record("train/returns_mean", float(np.mean(returns)))
+        self.logger.record("train/returns_std", float(np.std(returns)))
+        self.logger.record("train/values_mean", float(np.mean(values_buf)))
+        self.logger.record("train/values_std", float(np.std(values_buf)))
+        self.logger.record("train/advantages_mean", float(np.mean(advantages_buf)))
+        self.logger.record("train/advantages_std", float(np.std(advantages_buf)))
+        self.logger.record("train/grad_norm_pre_clip", float(np.mean(grad_norms_pre_clip)) if len(grad_norms_pre_clip) else 0.0)
         # Logs
         self.logger.record("train/entropy_loss", np.mean(entropy_losses))
         self.logger.record("train/policy_gradient_loss", np.mean(pg_losses))
         self.logger.record("train/value_loss", np.mean(value_losses))
         self.logger.record("train/approx_kl", np.mean(approx_kl_divs))
         self.logger.record("train/clip_fraction", np.mean(clip_fractions))
-        self.logger.record("train/loss", loss.item())
+        self.logger.record("train/loss", float(np.mean(total_losses)) if len(total_losses) else float(loss.item()))
         self.logger.record("train/explained_variance", explained_variance_)
         if hasattr(self.policy, "log_std"):
             self.logger.record("train/std", torch.exp(self.policy.log_std).mean().item())
