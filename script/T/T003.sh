@@ -34,7 +34,7 @@ python3 src/main.py \
 	--eval-episodes 2 \
 	--eval-max-steps 6000 \
 	--record-steps 3000 \
-	--backbone "resnet50" \
+	--backbone "resnet18" \
 	--log-dir "./runs_T003" \
 	--device "cuda:0" \
 	>> T003.log 2>&1
