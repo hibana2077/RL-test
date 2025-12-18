@@ -34,6 +34,7 @@ python3 src/main.py \
 	--eval-episodes 2 \
 	--eval-max-steps 6000 \
 	--record-steps 3000 \
+	--reward-scale 0.01 \
 	--log-dir "./runs_T001" \
 	--device "cuda:0" \
 	>> T001.log 2>&1

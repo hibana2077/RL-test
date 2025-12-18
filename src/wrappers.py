@@ -291,6 +291,7 @@ class RewardOverrideWrapper(gym.Wrapper):
     def __init__(
         self,
         env,
+        reward_scale: float = 1.0,
         # === 距離獎勵 (最重要！) ===
         distance_scale: float = 0.1,        # 基礎距離獎勵
         distance_exp_bonus: float = 1.5,    # 距離指數獎勵 (越遠越值錢)
@@ -319,6 +320,8 @@ class RewardOverrideWrapper(gym.Wrapper):
         win_reward: float = 500.0,
     ):
         super().__init__(env)
+
+        self.reward_scale = float(reward_scale)
         
         self.distance_scale = distance_scale
         self.distance_exp_bonus = distance_exp_bonus
@@ -461,6 +464,7 @@ class RewardOverrideWrapper(gym.Wrapper):
         if terminated or truncated:
             self._reset_trackers(info)
 
+        reward *= self.reward_scale
         return obs, reward, terminated, truncated, info
         
         # Episode 結束時重置
@@ -502,6 +506,7 @@ def make_base_env(
     preprocess_mode: str = "fixed",
     timm_model_name: Optional[str] = None,
     timm_data_cfg: Optional[dict[str, Any]] = None,
+    reward_scale: float = 1.0,
 ):
     env = retro.make(game=game, state=state, render_mode="rgb_array")
     env = PreprocessObsWrapper(
@@ -513,6 +518,6 @@ def make_base_env(
     env = DiscreteActionWrapper(env, COMBOS)
     env = ExtraInfoWrapper(env)
     env = LifeTerminationWrapper(env)
-    env = RewardOverrideWrapper(env)
+    env = RewardOverrideWrapper(env, reward_scale=reward_scale)
     env = AuxObservationWrapper(env)
     return env

@@ -18,13 +18,20 @@ def evaluate_policy(
     *,
     preprocess_mode: str = "fixed",
     timm_model_name: Optional[str] = None,
+    reward_scale: float = 1.0,
 ):
     """
     評估策略性能。如果提供了 env 則使用該環境，否則創建新環境。
     """
     close_env = False
     if env is None:
-        env = make_base_env(game, state, preprocess_mode=preprocess_mode, timm_model_name=timm_model_name)
+        env = make_base_env(
+            game,
+            state,
+            preprocess_mode=preprocess_mode,
+            timm_model_name=timm_model_name,
+            reward_scale=reward_scale,
+        )
         close_env = True
     
     returns = []
@@ -102,6 +109,7 @@ def record_video(
     *,
     preprocess_mode: str = "fixed",
     timm_model_name: Optional[str] = None,
+    reward_scale: float = 1.0,
 ):
     """
     錄製遊戲影片。如果提供了 env 則使用該環境，否則創建新環境。
@@ -112,7 +120,13 @@ def record_video(
 
         close_env = False
         if env is None:
-            env = make_base_env(game, state, preprocess_mode=preprocess_mode, timm_model_name=timm_model_name)
+            env = make_base_env(
+                game,
+                state,
+                preprocess_mode=preprocess_mode,
+                timm_model_name=timm_model_name,
+                reward_scale=reward_scale,
+            )
             close_env = True
         
         fps = env.metadata.get("render_fps", 60)

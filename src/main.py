@@ -67,6 +67,14 @@ def parse_args() -> argparse.Namespace:
         help="timm backbone model name for VisionBackboneExtractor (default: resnet18)",
     )
 
+    # Reward scaling
+    parser.add_argument(
+        "--reward-scale",
+        type=float,
+        default=1.0,
+        help="Multiply shaped rewards by this factor (default: 1.0)",
+    )
+
     return parser.parse_args()
 
 
@@ -127,7 +135,13 @@ print("=" * 60)
 
 def create_single_env(game: str, state: str):
     """創建單一環境並用 DummyVecEnv 包裝 (retro 限制)"""
-    env = make_base_env(game, state, preprocess_mode="timm", timm_model_name=ARGS.backbone)
+    env = make_base_env(
+        game,
+        state,
+        preprocess_mode="timm",
+        timm_model_name=ARGS.backbone,
+        reward_scale=ARGS.reward_scale,
+    )
     vec_env = DummyVecEnv([lambda: env])
     return vec_env, env  # 返回兩者以便後續使用
 
@@ -144,7 +158,13 @@ except:
 
 # 1. Create Training Environment
 print("Creating training environment...")
-base_env = make_base_env(GAME, STATE, preprocess_mode="timm", timm_model_name=ARGS.backbone)
+base_env = make_base_env(
+    GAME,
+    STATE,
+    preprocess_mode="timm",
+    timm_model_name=ARGS.backbone,
+    reward_scale=ARGS.reward_scale,
+)
 if N_ENVS != 1:
     print(f"[WARN] retro 環境通常限制每個進程只能有一個實例；已將 n_envs 從 {N_ENVS} 覆寫為 1")
     N_ENVS = 1
