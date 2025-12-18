@@ -151,27 +151,27 @@ print("Environment functions defined.")
 
 # 0. Close existing environment if exists
 try:
-    if 'base_env' in globals():
-        base_env.close()
-    if 'train_env' in globals():
+    if "train_env" in globals():
         train_env.close()
-except:
+except Exception:
     pass
 
 # 1. Create Training Environment
 print("Creating training environment...")
-base_env = make_base_env(
-    GAME,
-    STATE,
-    preprocess_mode="timm",
-    timm_model_name=ARGS.backbone,
-    reward_scale=ARGS.reward_scale,
-)
 if N_ENVS != 1:
     print(f"[WARN] retro 環境通常限制每個進程只能有一個實例；已將 n_envs 從 {N_ENVS} 覆寫為 1")
     N_ENVS = 1
 
-train_env = DummyVecEnv([lambda: base_env])
+def _make_train_env():
+    return make_base_env(
+        GAME,
+        STATE,
+        preprocess_mode="timm",
+        timm_model_name=ARGS.backbone,
+        reward_scale=ARGS.reward_scale,
+    )
+
+train_env = DummyVecEnv([_make_train_env])
 print(f"Environment: {GAME} - {STATE}")
 print(f"Observation: {train_env.observation_space}")
 print(f"Actions: {train_env.action_space}")
@@ -232,7 +232,16 @@ try:
         model.save(ckpt_path)
         print(f"Saved checkpoint: {ckpt_path}")
 
-        # --- Evaluate (使用同一個環境) ---
+        # NOTE: Do NOT reuse the same env for train+eval+record.
+        # SB3 keeps internal last_obs between learn() calls (reset_num_timesteps=False).
+        # If we step/reset the training env outside model.learn(), rollouts become inconsistent
+        # and losses can blow up while rewards appear stuck.
+        #
+        # Gym Retro is also finicky about multiple env instances per process, so we
+        # temporarily close the training env before eval/video, then recreate it.
+        train_env.close()
+
+        # --- Evaluate ---
         print("Evaluating...")
         mean_ret, best_ret = evaluate_policy(
             model,
@@ -240,7 +249,9 @@ try:
             STATE,
             n_episodes=EVAL_EPISODES,
             max_steps=EVAL_MAX_STEPS,
-            env=base_env,  # 使用同一個環境
+            preprocess_mode="timm",
+            timm_model_name=ARGS.backbone,
+            reward_scale=ARGS.reward_scale,
         )
         print(f"[EVAL] Mean Return: {mean_ret:.3f}, Best Return: {best_ret:.3f}")
 
@@ -251,7 +262,7 @@ try:
             model.save(best_path)
             print(f"*** New best record! Saved to {best_path} ***")
 
-        # --- Record Video (使用同一個環境) ---
+        # --- Record Video ---
         print("Recording video...")
         record_video(
             model,
@@ -260,8 +271,14 @@ try:
             VIDEO_DIR,
             video_len=RECORD_STEPS,
             prefix=f"step_{trained}_mean_{mean_ret:.2f}",
-            env=base_env,  # 使用同一個環境
+            preprocess_mode="timm",
+            timm_model_name=ARGS.backbone,
+            reward_scale=ARGS.reward_scale,
         )
+
+        # Re-create training env after eval/video
+        train_env = DummyVecEnv([_make_train_env])
+        model.set_env(train_env)
         
         # GPU 記憶體狀態
         if torch.cuda.is_available():
@@ -277,6 +294,11 @@ finally:
     print(f"Total steps trained: {trained:,}")
     print(f"Best mean return: {best_mean:.3f}")
     print("=" * 60)
+
+    try:
+        train_env.close()
+    except Exception:
+        pass
 
 print(f"You can now review the recorded videos in the '{VIDEO_DIR}' directory.")
 

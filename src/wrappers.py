@@ -365,14 +365,49 @@ class RewardOverrideWrapper(gym.Wrapper):
         return obs, info
 
     def step(self, action):
-        obs, _, terminated, truncated, info = self.env.step(action)
+        obs, env_reward, terminated, truncated, info = self.env.step(action)
         if not isinstance(info, dict):
             info = {}
 
         self._step_count += 1
         reward = 0.0
         
-        x_pos = info.get("x_pos", 0)
+        # If x_pos is missing (e.g., RAM unavailable or address mismatch),
+        # fall back to the underlying env reward to avoid a degenerate constant-return signal.
+        x_pos = info.get("x_pos", None)
+        if x_pos is None:
+            shaped = 0.0
+
+            # survival reward still provides a weak shaping signal
+            if self.survival_scaling:
+                survival = self.survival_reward * (1 + self._step_count / 500)
+                shaped += min(survival, 2.0)
+            else:
+                shaped += self.survival_reward
+
+            # retain native reward when x_pos is unavailable
+            shaped += float(env_reward)
+
+            # action diversity still applies
+            if isinstance(action, np.ndarray):
+                action_int = int(action[0]) if len(action.shape) > 0 else int(action)
+            else:
+                action_int = int(action)
+            self._action_history.append(action_int)
+            if len(self._action_history) > 20:
+                self._action_history.pop(0)
+            if len(self._action_history) >= 10:
+                unique_actions = len(set(self._action_history[-10:]))
+                if unique_actions >= 4:
+                    shaped += self.action_diversity_reward
+
+            if terminated or truncated:
+                self._reset_trackers(info)
+
+            shaped *= self.reward_scale
+            return obs, shaped, terminated, truncated, info
+
+        x_pos = float(x_pos)
         
         # ============ 1. 存活獎勵 (核心改動) ============
         # 活著就有獎勵，而且越活越久獎勵越高
@@ -465,15 +500,6 @@ class RewardOverrideWrapper(gym.Wrapper):
             self._reset_trackers(info)
 
         reward *= self.reward_scale
-        return obs, reward, terminated, truncated, info
-        
-        # Episode 結束時重置
-        if terminated or truncated:
-            # 保留 global_max_x，其他重置
-            prev_global = self._global_max_x
-            self._reset_trackers(info)
-            self._global_max_x = prev_global
-
         return obs, reward, terminated, truncated, info
 
 
