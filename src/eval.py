@@ -95,7 +95,9 @@ def record_video(model: CustomPPO, game: str, state: str, out_dir: str, video_le
             close_env = True
         
         fps = env.metadata.get("render_fps", 60)
-        writer = imageio.get_writer(out_path, fps=fps, codec='libx264')
+        # Force the ffmpeg backend; otherwise imageio may fall back to a TIFF writer
+        # (e.g., when imageio-ffmpeg isn't installed), which doesn't accept fps/codec.
+        writer = imageio.get_writer(out_path, format="ffmpeg", fps=fps, codec="libx264")
         font = ImageFont.load_default()
 
         obs, info = env.reset()
@@ -119,4 +121,5 @@ def record_video(model: CustomPPO, game: str, state: str, out_dir: str, video_le
         print(f"Saved video to {out_path}")
     except Exception as e:
         print(f"Warning: Could not record video: {e}")
+        print("If you're on Windows, ensure FFmpeg is available and install: pip install imageio-ffmpeg")
         print("Skipping video recording...")

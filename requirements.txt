@@ -56,3 +56,4 @@ ptflops  # For FLOPs computation
 stable-retro
 stable-baselines3[extra]
 imageio
+imageio-ffmpeg
