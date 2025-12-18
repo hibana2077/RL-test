@@ -266,6 +266,18 @@ class CustomPPO(OnPolicyAlgorithm):
                 ################################
                 self.policy.optimizer.zero_grad()
                 loss.backward()
+                
+                # === Debug: Check Gradients ===
+                total_norm = 0.0
+                for p in self.policy.parameters():
+                    if p.grad is not None:
+                        param_norm = p.grad.data.norm(2)
+                        total_norm += param_norm.item() ** 2
+                total_norm = total_norm ** 0.5
+                if self._n_updates % 10 == 0:
+                    print(f"[DEBUG] Update {self._n_updates} | Loss: {loss.item():.4f} | Grad Norm: {total_norm:.4f}")
+                # ==============================
+
                 # Clip grad norm
                 torch.nn.utils.clip_grad_norm_(self.policy.parameters(), self.max_grad_norm)
                 self.policy.optimizer.step()
