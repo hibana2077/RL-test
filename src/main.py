@@ -43,6 +43,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--gamma", type=float, default=0.995, help="Discount factor")
     parser.add_argument("--kl-coef", type=float, default=0.1, help="KL coefficient (CustomPPO)")
     parser.add_argument("--ent-coef", type=float, default=0.1, help="Entropy coefficient")
+    parser.add_argument("--vf-coef", type=float, default=0.5, help="Value function coefficient")
     parser.add_argument("--clip-range", type=float, default=0.3, help="PPO clip range")
 
     # Eval / record
@@ -96,6 +97,7 @@ N_EPOCHS = ARGS.n_epochs           # PPO epochs
 LEARNING_RATE = ARGS.learning_rate # 學習率
 GAMMA = ARGS.gamma                 # 折扣因子
 KL_COEF = ARGS.kl_coef             # KL coefficient
+VF_COEF = ARGS.vf_coef             # Value function coefficient
 ENT_COEF = ARGS.ent_coef           # Entropy coefficient
 CLIP_RANGE = ARGS.clip_range       # PPO clip range
 
