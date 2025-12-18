@@ -4,6 +4,8 @@ import numpy as np
 import torch
 from stable_baselines3.common.vec_env import DummyVecEnv
 
+import argparse
+
 # 重新載入模組以確保使用最新的代碼
 import importlib
 import wrappers
@@ -23,32 +25,71 @@ if torch.cuda.is_available():
     print(f"GPU: {torch.cuda.get_device_name(0)}")
     print(f"GPU Memory: {torch.cuda.get_device_properties(0).total_memory / 1024**3:.2f} GB")
 
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Train PPO on Gym Retro (SMW) with configurable hyperparameters")
+
+    # Game
+    parser.add_argument("--game", type=str, default="SuperMarioWorld-Snes", help="Retro game id")
+    parser.add_argument("--state", type=str, default="YoshiIsland1", help="Retro state")
+
+    # Training (defaults keep the original constants)
+    parser.add_argument("--total-steps", type=int, default=500_000, help="Total training timesteps")
+    parser.add_argument("--train-chunk", type=int, default=25_000, help="Timesteps per training round")
+    parser.add_argument("--n-envs", type=int, default=1, help="Number of parallel envs (retro usually requires 1)")
+    parser.add_argument("--n-steps", type=int, default=1024, help="Steps collected per rollout")
+    parser.add_argument("--batch-size", type=int, default=128, help="Minibatch size")
+    parser.add_argument("--n-epochs", type=int, default=4, help="PPO epochs per update")
+    parser.add_argument("--learning-rate", type=float, default=5e-4, help="Learning rate")
+    parser.add_argument("--gamma", type=float, default=0.995, help="Discount factor")
+    parser.add_argument("--kl-coef", type=float, default=0.1, help="KL coefficient (CustomPPO)")
+    parser.add_argument("--ent-coef", type=float, default=0.1, help="Entropy coefficient")
+    parser.add_argument("--clip-range", type=float, default=0.3, help="PPO clip range")
+
+    # Eval / record
+    parser.add_argument("--eval-episodes", type=int, default=2, help="Episodes per evaluation")
+    parser.add_argument("--eval-max-steps", type=int, default=6000, help="Max steps per eval episode")
+    parser.add_argument("--record-steps", type=int, default=3000, help="Steps to record per round")
+
+    # Logging
+    parser.add_argument("--log-dir", type=str, default="./runs_smw", help="Base output directory")
+    parser.add_argument(
+        "--device",
+        type=str,
+        default="cuda:0" if torch.cuda.is_available() else "cpu",
+        help="Torch device string, e.g. 'cpu' or 'cuda:0'",
+    )
+
+    return parser.parse_args()
+
+
+ARGS = parse_args()
+
 # Game Settings
-GAME = "SuperMarioWorld-Snes"
-STATE = "YoshiIsland1"
+GAME = ARGS.game
+STATE = ARGS.state
 
 # ==========================================
-# 強力抗局部最優配置 V2
+# 強力抗局部最優配置 V2 (可透過參數覆寫)
 # ==========================================
-TOTAL_STEPS = 500_000     # 總訓練步數
-TRAIN_CHUNK = 25_000      # 每輪訓練步數
-N_ENVS = 1                # 並行環境數 (retro 限制)
-N_STEPS = 1024            # 每次收集步數 (增加，收集更多經驗)
-BATCH_SIZE = 128          # Batch size (減小，更頻繁更新)
-N_EPOCHS = 4              # PPO epochs (減少，避免過擬合)
-LEARNING_RATE = 5e-4      # 學習率 (稍微提高)
-GAMMA = 0.995             # 折扣因子 (提高，更重視長期獎勵)
-KL_COEF = 0.1             # KL coefficient (大幅降低，允許大policy更新)
-ENT_COEF = 0.1            # ★★★ Entropy coefficient 大幅提高! ★★★
-CLIP_RANGE = 0.3          # PPO clip range (放寬)
+TOTAL_STEPS = ARGS.total_steps     # 總訓練步數
+TRAIN_CHUNK = ARGS.train_chunk     # 每輪訓練步數
+N_ENVS = ARGS.n_envs               # 並行環境數 (retro 限制)
+N_STEPS = ARGS.n_steps             # 每次收集步數
+BATCH_SIZE = ARGS.batch_size       # Batch size
+N_EPOCHS = ARGS.n_epochs           # PPO epochs
+LEARNING_RATE = ARGS.learning_rate # 學習率
+GAMMA = ARGS.gamma                 # 折扣因子
+KL_COEF = ARGS.kl_coef             # KL coefficient
+ENT_COEF = ARGS.ent_coef           # Entropy coefficient
+CLIP_RANGE = ARGS.clip_range       # PPO clip range
 
 # Evaluation & Recording Settings
-EVAL_EPISODES = 2
-EVAL_MAX_STEPS = 6000
-RECORD_STEPS = 3000
+EVAL_EPISODES = ARGS.eval_episodes
+EVAL_MAX_STEPS = ARGS.eval_max_steps
+RECORD_STEPS = ARGS.record_steps
 
 # Directories
-LOG_DIR = "./runs_smw"
+LOG_DIR = ARGS.log_dir
 VIDEO_DIR = os.path.join(LOG_DIR, "videos")
 CKPT_DIR = os.path.join(LOG_DIR, "checkpoints")
 TENSORBOARD_LOG = os.path.join(LOG_DIR, "tb")
@@ -65,6 +106,11 @@ print(f"★ KL_COEF = {KL_COEF} (允許大更新)")
 print(f"★ GAMMA = {GAMMA} (重視長期)")
 print(f"★ 死亡懲罰 = 0 (完全不怕死)")
 print(f"★ 存活獎勵 = 隨時間增加")
+print(f"★ GAME/STATE = {GAME} / {STATE}")
+print(f"★ TOTAL_STEPS = {TOTAL_STEPS:,} | TRAIN_CHUNK = {TRAIN_CHUNK:,}")
+print(f"★ N_STEPS = {N_STEPS} | BATCH_SIZE = {BATCH_SIZE} | N_EPOCHS = {N_EPOCHS}")
+print(f"★ LEARNING_RATE = {LEARNING_RATE} | CLIP_RANGE = {CLIP_RANGE}")
+print(f"★ DEVICE = {ARGS.device}")
 print("=" * 60)
 
 # 由於 retro 限制每個進程只能有一個環境實例
@@ -90,6 +136,10 @@ except:
 # 1. Create Training Environment
 print("Creating training environment...")
 base_env = make_base_env(GAME, STATE)
+if N_ENVS != 1:
+    print(f"[WARN] retro 環境通常限制每個進程只能有一個實例；已將 n_envs 從 {N_ENVS} 覆寫為 1")
+    N_ENVS = 1
+
 train_env = DummyVecEnv([lambda: base_env])
 print(f"Environment: {GAME} - {STATE}")
 print(f"Observation: {train_env.observation_space}")
@@ -114,7 +164,7 @@ model = CustomPPO(
     ent_coef=ENT_COEF,
     clip_range=CLIP_RANGE,
     tensorboard_log=TENSORBOARD_LOG,
-    device='cuda:0' if torch.cuda.is_available() else 'cpu',
+    device=ARGS.device,
 )
 
 # 模型資訊

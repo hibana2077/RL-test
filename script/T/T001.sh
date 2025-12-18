@@ -23,17 +23,17 @@ python3 src/main.py \
 	--total-steps 500000 \
 	--train-chunk 25000 \
 	--n-envs 1 \
-	--n-steps 1024 \
-	--batch-size 128 \
+	--n-steps 2048 \
+	--batch-size 256 \
 	--n-epochs 4 \
-	--learning-rate 5e-4 \
+	--learning-rate 3e-4 \
 	--gamma 0.995 \
-	--kl-coef 0.1 \
-	--ent-coef 0.1 \
-	--clip-range 0.3 \
+	--kl-coef 0.02 \
+	--ent-coef 0.01 \
+	--clip-range 0.2 \
 	--eval-episodes 2 \
 	--eval-max-steps 6000 \
 	--record-steps 3000 \
-	--log-dir "./runs_T000" \
+	--log-dir "./runs_T001" \
 	--device "cuda:0" \
-	>> T000.log 2>&1
+	>> T001.log 2>&1
