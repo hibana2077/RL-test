@@ -19,7 +19,7 @@ cd ../..
 python3 -m retro.import ./roms
 python3 src/main.py \
 	--game "SuperMarioWorld-Snes" \
-	--state "YoshiIsland1" \
+	--state "Bridges1" \
 	--total-steps 500000 \
 	--train-chunk 25000 \
 	--n-envs 1 \
