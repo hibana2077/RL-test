@@ -8,13 +8,23 @@ import imageio.v2 as imageio
 from wrappers import make_base_env
 
 
-def evaluate_policy(model: CustomPPO, game: str, state: str, n_episodes: int, max_steps: int, env=None):
+def evaluate_policy(
+    model: CustomPPO,
+    game: str,
+    state: str,
+    n_episodes: int,
+    max_steps: int,
+    env=None,
+    *,
+    preprocess_mode: str = "fixed",
+    timm_model_name: Optional[str] = None,
+):
     """
     評估策略性能。如果提供了 env 則使用該環境，否則創建新環境。
     """
     close_env = False
     if env is None:
-        env = make_base_env(game, state)
+        env = make_base_env(game, state, preprocess_mode=preprocess_mode, timm_model_name=timm_model_name)
         close_env = True
     
     returns = []
@@ -81,7 +91,18 @@ def _annotate_frame(frame: np.ndarray, cumulative_reward: float, last_reward: fl
     return np.array(img)
 
 
-def record_video(model: CustomPPO, game: str, state: str, out_dir: str, video_len: int, prefix: str, env=None):
+def record_video(
+    model: CustomPPO,
+    game: str,
+    state: str,
+    out_dir: str,
+    video_len: int,
+    prefix: str,
+    env=None,
+    *,
+    preprocess_mode: str = "fixed",
+    timm_model_name: Optional[str] = None,
+):
     """
     錄製遊戲影片。如果提供了 env 則使用該環境，否則創建新環境。
     """
@@ -91,7 +112,7 @@ def record_video(model: CustomPPO, game: str, state: str, out_dir: str, video_le
 
         close_env = False
         if env is None:
-            env = make_base_env(game, state)
+            env = make_base_env(game, state, preprocess_mode=preprocess_mode, timm_model_name=timm_model_name)
             close_env = True
         
         fps = env.metadata.get("render_fps", 60)

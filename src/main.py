@@ -59,6 +59,14 @@ def parse_args() -> argparse.Namespace:
         help="Torch device string, e.g. 'cpu' or 'cuda:0'",
     )
 
+    # Vision backbone (timm model name)
+    parser.add_argument(
+        "--backbone",
+        type=str,
+        default="resnet18",
+        help="timm backbone model name for VisionBackboneExtractor (default: resnet18)",
+    )
+
     return parser.parse_args()
 
 
@@ -111,6 +119,7 @@ print(f"★ TOTAL_STEPS = {TOTAL_STEPS:,} | TRAIN_CHUNK = {TRAIN_CHUNK:,}")
 print(f"★ N_STEPS = {N_STEPS} | BATCH_SIZE = {BATCH_SIZE} | N_EPOCHS = {N_EPOCHS}")
 print(f"★ LEARNING_RATE = {LEARNING_RATE} | CLIP_RANGE = {CLIP_RANGE}")
 print(f"★ DEVICE = {ARGS.device}")
+print(f"★ BACKBONE = {ARGS.backbone}")
 print("=" * 60)
 
 # 由於 retro 限制每個進程只能有一個環境實例
@@ -118,7 +127,7 @@ print("=" * 60)
 
 def create_single_env(game: str, state: str):
     """創建單一環境並用 DummyVecEnv 包裝 (retro 限制)"""
-    env = make_base_env(game, state)
+    env = make_base_env(game, state, preprocess_mode="timm", timm_model_name=ARGS.backbone)
     vec_env = DummyVecEnv([lambda: env])
     return vec_env, env  # 返回兩者以便後續使用
 
@@ -135,7 +144,7 @@ except:
 
 # 1. Create Training Environment
 print("Creating training environment...")
-base_env = make_base_env(GAME, STATE)
+base_env = make_base_env(GAME, STATE, preprocess_mode="timm", timm_model_name=ARGS.backbone)
 if N_ENVS != 1:
     print(f"[WARN] retro 環境通常限制每個進程只能有一個實例；已將 n_envs 從 {N_ENVS} 覆寫為 1")
     N_ENVS = 1
@@ -153,7 +162,10 @@ print("=" * 60)
 model = CustomPPO(
     VisionBackbonePolicy,
     train_env,
-    policy_kwargs=dict(normalize_images=False),
+    policy_kwargs=dict(
+        normalize_images=False,
+        features_extractor_kwargs=dict(backbone_name=ARGS.backbone),
+    ),
     n_epochs=N_EPOCHS,
     n_steps=N_STEPS,
     batch_size=BATCH_SIZE,

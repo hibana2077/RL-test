@@ -14,12 +14,12 @@ from stable_baselines3.common.torch_layers import BaseFeaturesExtractor
 from stable_baselines3.common.type_aliases import GymEnv, MaybeCallback, Schedule
 from stable_baselines3.common.utils import FloatSchedule, explained_variance
 class VisionBackboneExtractor(BaseFeaturesExtractor):
-    def __init__(self, observation_space: spaces.Box):
+    def __init__(self, observation_space: spaces.Box, backbone_name: str = "resnet18"):
         channels, height, width = observation_space.shape
         # Temporary value, will be updated after backbone is created
         super().__init__(observation_space, features_dim=1)
         self.backbone = timm.create_model(
-            "resnet18", # convnext_small.dinov3_lvd1689m, convnext_base.clip_laion2b
+            backbone_name,  # e.g. resnet18, convnext_small.dinov3_lvd1689m, convnext_base.clip_laion2b
             pretrained=True,
             in_chans=channels,
             features_only=True,
@@ -65,12 +65,12 @@ class ScalarAttentionEncoder(nn.Module):
 
 
 class VisionScalarExtractor(BaseFeaturesExtractor):
-    def __init__(self, observation_space: spaces.Dict):
+    def __init__(self, observation_space: spaces.Dict, backbone_name: str = "resnet18"):
         assert isinstance(observation_space, spaces.Dict), "VisionScalarExtractor expects a Dict observation space"
         image_space = observation_space["image"]
         scalar_space = observation_space["scalars"]
         super().__init__(observation_space, features_dim=1)
-        self.image_extractor = VisionBackboneExtractor(image_space)
+        self.image_extractor = VisionBackboneExtractor(image_space, backbone_name=backbone_name)
         scalar_dim = int(np.prod(scalar_space.shape))
         ######################################
         # 定義簡單的 MLP 處理 scalar 輸入 (步數、時間等資訊)

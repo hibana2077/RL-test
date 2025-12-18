@@ -1,31 +1,101 @@
 import numpy as np
 import gymnasium as gym
 import torchvision.transforms as T
+from PIL import Image
+import torch
+from typing import Any, Optional
 
 
 class PreprocessObsWrapper(gym.ObservationWrapper):
-    """Fixed preprocessing: resize to 224, normalize to [-1,1], output CHW float32."""
+    """Observation preprocessing.
 
-    def __init__(self, env):
+    Modes:
+    - "fixed" (default): resize to 224, normalize to [-1, 1], output numpy CHW float32
+    - "timm": build torchvision transform from a timm model's pretrained config
+      via timm.data.resolve_data_config + timm.data.create_transform
+    """
+
+    def __init__(
+        self,
+        env,
+        mode: str = "fixed",
+        timm_model: Optional[Any] = None,
+        timm_model_name: Optional[str] = None,
+        timm_data_cfg: Optional[dict[str, Any]] = None,
+    ):
         super().__init__(env)
         obs_space = env.observation_space
         if not isinstance(obs_space, gym.spaces.Box):
             raise TypeError("PreprocessObsWrapper requires a Box observation space")
-        self.resize_shape = (224, 224)
-        c = obs_space.shape[2]
-        low = np.full((c, 224, 224), -1.0, dtype=np.float32)
-        high = np.full((c, 224, 224), 1.0, dtype=np.float32)
+
+        if mode not in {"fixed", "timm"}:
+            raise ValueError("mode must be 'fixed' or 'timm'")
+
+        if mode == "fixed":
+            self.resize_shape = (224, 224)
+            c = obs_space.shape[2]
+            low = np.full((c, 224, 224), -1.0, dtype=np.float32)
+            high = np.full((c, 224, 224), 1.0, dtype=np.float32)
+            self.observation_space = gym.spaces.Box(low=low, high=high, dtype=np.float32)
+
+            transforms = []
+            transforms.append(T.ToTensor())  # -> float CHW in [0,1]
+            transforms.append(T.Resize(self.resize_shape, antialias=True))
+            transforms.append(T.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5]))
+            transforms.append(T.Lambda(lambda x: x.numpy()))
+            self.pipeline = T.Compose(transforms)
+            self._use_timm = False
+            return
+
+        # === timm mode ===
+        try:
+            import timm  # local import so fixed mode doesn't depend on timm
+            import timm.data
+        except Exception as e:
+            raise ImportError("timm mode requested but timm is not available") from e
+
+        if timm_data_cfg is None:
+            if timm_model is None:
+                if not timm_model_name:
+                    raise ValueError("timm mode requires timm_data_cfg, timm_model, or timm_model_name")
+                # Note: envs are typically created once (n_envs=1), so creating a model here is acceptable.
+                timm_model = timm.create_model(timm_model_name, pretrained=True)
+
+            pretrained_cfg = getattr(timm_model, "pretrained_cfg", None) or getattr(timm_model, "default_cfg", {})
+            timm_data_cfg = timm.data.resolve_data_config(pretrained_cfg, model=timm_model)
+
+        input_size = timm_data_cfg.get("input_size", (3, 224, 224))
+        if not (isinstance(input_size, (tuple, list)) and len(input_size) == 3):
+            raise ValueError(f"unexpected timm data_cfg.input_size: {input_size!r}")
+        c, h, w = int(input_size[0]), int(input_size[1]), int(input_size[2])
+        self.resize_shape = (h, w)
+
+        # timm normalization uses mean/std (typically ImageNet); bounds are unbounded after normalize.
+        low = np.full((c, h, w), -np.inf, dtype=np.float32)
+        high = np.full((c, h, w), np.inf, dtype=np.float32)
         self.observation_space = gym.spaces.Box(low=low, high=high, dtype=np.float32)
 
-        transforms = []
-        transforms.append(T.ToTensor())  # -> float CHW in [0,1]
-        transforms.append(T.Resize(self.resize_shape, antialias=True))
-        transforms.append(T.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5]))
-        transforms.append(T.Lambda(lambda x: x.numpy()))
-        self.pipeline = T.Compose(transforms)
+        self.pipeline = timm.data.create_transform(**timm_data_cfg, is_training=False)
+        self._use_timm = True
 
     def observation(self, observation):
-        return self.pipeline(observation)
+        if not self._use_timm:
+            return self.pipeline(observation)
+
+        # timm transforms are usually torchvision transforms that expect a PIL image.
+        if isinstance(observation, np.ndarray):
+            img = Image.fromarray(observation)
+        elif isinstance(observation, Image.Image):
+            img = observation
+        else:
+            # Best effort: pass through (some transforms accept tensors)
+            img = observation
+
+        out = self.pipeline(img)
+        if isinstance(out, torch.Tensor):
+            out = out.detach().cpu().numpy()
+        out = np.asarray(out, dtype=np.float32)
+        return out
 
 
 
@@ -425,9 +495,21 @@ COMBOS = [
     ["LEFT", "A", "B"],  # 12: 左 + 跳 + 跑
 ]
 import retro
-def make_base_env(game: str, state: str):
+def make_base_env(
+    game: str,
+    state: str,
+    *,
+    preprocess_mode: str = "fixed",
+    timm_model_name: Optional[str] = None,
+    timm_data_cfg: Optional[dict[str, Any]] = None,
+):
     env = retro.make(game=game, state=state, render_mode="rgb_array")
-    env = PreprocessObsWrapper(env)
+    env = PreprocessObsWrapper(
+        env,
+        mode=preprocess_mode,
+        timm_model_name=timm_model_name,
+        timm_data_cfg=timm_data_cfg,
+    )
     env = DiscreteActionWrapper(env, COMBOS)
     env = ExtraInfoWrapper(env)
     env = LifeTerminationWrapper(env)
