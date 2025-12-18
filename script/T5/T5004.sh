@@ -35,6 +35,6 @@ python3 src/main.py \
 	--eval-max-steps 6000 \
 	--record-steps 3000 \
     --reward-scale 0.05 \
-	--log-dir "./runs_T5001" \
+	--log-dir "./runs_T5004" \
 	--device "cuda:0" \
-	>> T5001.log 2>&1
+	>> T5004.log 2>&1
