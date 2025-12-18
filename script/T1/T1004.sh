@@ -22,19 +22,19 @@ python3 src/main.py \
 	--state "YoshiIsland1" \
 	--total-steps 10000000 \
 	--train-chunk 25000 \
-	--n-envs 1 \
-	--n-steps 2048 \
-	--batch-size 128 \
+	--n-envs 8 \
+	--n-steps 256 \
+	--batch-size 256 \
 	--n-epochs 10 \
 	--learning-rate 5e-4 \
 	--gamma 0.995 \
 	--kl-coef 0.01 \
 	--ent-coef 0.01 \
-	--clip-range 0.3 \
+	--clip-range 0.2 \
 	--eval-episodes 4 \
 	--eval-max-steps 6000 \
 	--record-steps 3000 \
     --reward-scale 0.05 \
-	--log-dir "./runs_T1001" \
+	--log-dir "./runs_T1004" \
 	--device "cuda:0" \
-	>> T1001.log 2>&1
+	>> T1004.log 2>&1
