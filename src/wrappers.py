@@ -3,6 +3,8 @@ import gymnasium as gym
 import torchvision.transforms as T
 from PIL import Image
 import torch
+import torch.nn as nn
+import torch.nn.functional as F
 from typing import Any, Optional
 
 
@@ -298,41 +300,8 @@ class RewardOverrideWrapper(gym.Wrapper):
         self,
         env,
         reward_scale: float = 1.0,
-        # === 距離獎勵 (最重要！) ===
-        distance_scale: float = 0.1,        # 唯一 dense 前進獎勵
-        new_max_bonus: float = 1.0,         # 刷新最遠位置的低頻探索提示(建議小)
-        # (debug/curriculum) 距離指數獎勵：預設關閉，避免後期爆炸
-        distance_exp_bonus: float = 0.0,
-        
-        # === 存活獎勵 (服從前進) ===
-        survival_reward: float = 0.02,      # 只有 x_delta>0 時才給
-        survival_scaling: bool = False,     # 若要用 scaling，仍會在 x_delta>0 時才套用
-        
-        # === 動作多樣性獎勵 ===
-        action_diversity_reward: float = 0.1,  # 獎勵使用不同動作
-        
         # === 終局處理 ===
-        death_penalty: float = -15.0,        # baseline death penalty (rd_f.md)
-        # (debug/curriculum) 死亡時根據距離給獎勵：預設關閉
-        distance_on_death_bonus: float = 0.0,
-
-        # === (debug/curriculum) 每秒位移範圍懲罰(逼迫往前走) ===
-        steps_per_second: int = 60,
-        min_movement_range: float = 0.0,
-        movement_range_penalty: float = 0.0,
-        
-        # === 停滯 soft constraint ===
-        stagnation_threshold: int = 15,
-        forward_reward_scale_when_stagnant: float = 0.2,
-        # (debug/curriculum) 若仍想額外施加停滯負獎勵，可手動設為非 0
-        stagnation_penalty: float = 0.0,
-        
-        # === (debug/curriculum) 遊戲指標：預設關閉 ===
-        coin_reward: float = 0.0,
-        score_reward_scale: float = 0.0,
-        
-        # === 通關(終局) ===
-        win_reward: float = 500.0,
+        death_penalty: float = -15.0,
     ):
         super().__init__(env)
 
@@ -391,6 +360,242 @@ class RewardOverrideWrapper(gym.Wrapper):
         return obs, reward, terminated, truncated, info
 
 
+class _RunningMeanVar:
+    def __init__(self, eps: float = 1e-8):
+        self.mean = 0.0
+        self.var = 1.0
+        self.count = 0
+        self.eps = float(eps)
+
+    def update(self, x: float) -> None:
+        x_f = float(x)
+        self.count += 1
+        if self.count == 1:
+            self.mean = x_f
+            self.var = 0.0
+            return
+        delta = x_f - self.mean
+        self.mean += delta / self.count
+        delta2 = x_f - self.mean
+        m2 = self.var * (self.count - 1) + delta * delta2
+        self.var = m2 / max(self.count - 1, 1)
+
+    def std(self) -> float:
+        return float(np.sqrt(max(self.var, 0.0) + self.eps))
+
+
+class IntrinsicRewardWrapper(gym.Wrapper):
+    """Add intrinsic rewards: curiosity (RND), novelty (episodic), state surprise.
+
+    Outputs to info:
+      - r_intrinsic, r_intrinsic_curiosity, r_intrinsic_novelty, r_intrinsic_surprise
+      - r_extrinsic (the incoming reward before adding intrinsic)
+
+    If intrinsic_scale != 0, the env reward is: r_total = r_extrinsic + intrinsic_scale * r_intrinsic
+    """
+
+    def __init__(
+        self,
+        env,
+        *,
+        intrinsic_scale: float = 0.0,
+        w_curiosity: float = 1.0,
+        w_novelty: float = 1.0,
+        w_surprise: float = 1.0,
+        embed_hw: tuple[int, int] = (16, 16),
+        rnd_hidden: int = 128,
+        rnd_out_dim: int = 64,
+        rnd_lr: float = 1e-4,
+        novelty_hash_bytes: int = 64,
+        max_episode_novelty_states: int = 50_000,
+        intrinsic_clip: float = 10.0,
+    ):
+        super().__init__(env)
+
+        self.intrinsic_scale = float(intrinsic_scale)
+        self.w_curiosity = float(w_curiosity)
+        self.w_novelty = float(w_novelty)
+        self.w_surprise = float(w_surprise)
+        self.embed_hw = (int(embed_hw[0]), int(embed_hw[1]))
+        self.novelty_hash_bytes = int(novelty_hash_bytes)
+        self.max_episode_novelty_states = int(max_episode_novelty_states)
+        self.intrinsic_clip = float(intrinsic_clip)
+
+        self._prev_embed: Optional[torch.Tensor] = None  # shape (D,)
+        self._visit_counts: dict[bytes, int] = {}
+
+        # RND networks (CPU by default; keep it lightweight and independent of SB3 device)
+        self._rnd_in_dim: Optional[int] = None
+        self._rnd_target: Optional[nn.Module] = None
+        self._rnd_pred: Optional[nn.Module] = None
+        self._rnd_opt: Optional[torch.optim.Optimizer] = None
+        self._rnd_rms = _RunningMeanVar()
+        self._rnd_hidden = int(rnd_hidden)
+        self._rnd_out_dim = int(rnd_out_dim)
+        self._rnd_lr = float(rnd_lr)
+
+        # Surprise stats (action-conditioned on delta magnitude)
+        self._surprise_rms = _RunningMeanVar()
+        self._per_action_stats: dict[int, _RunningMeanVar] = {}
+
+    def _extract_image(self, obs: Any) -> Optional[np.ndarray]:
+        if isinstance(obs, dict):
+            if "image" in obs:
+                return obs["image"]
+            return None
+        return obs
+
+    def _obs_to_tensor(self, obs: Any) -> Optional[torch.Tensor]:
+        img = self._extract_image(obs)
+        if img is None:
+            return None
+        if isinstance(img, torch.Tensor):
+            x = img.detach().float()
+            if x.ndim == 3:
+                x = x.unsqueeze(0)
+        else:
+            arr = np.asarray(img)
+            if arr.ndim == 3 and arr.shape[0] in (1, 3, 4):
+                # CHW
+                chw = arr
+            elif arr.ndim == 3 and arr.shape[-1] in (1, 3, 4):
+                # HWC -> CHW
+                chw = np.transpose(arr, (2, 0, 1))
+            else:
+                return None
+            x = torch.from_numpy(chw).float().unsqueeze(0)
+
+        # Ensure (B, C, H, W)
+        if x.ndim != 4:
+            return None
+        return x
+
+    def _embed(self, obs: Any) -> Optional[torch.Tensor]:
+        x = self._obs_to_tensor(obs)
+        if x is None:
+            return None
+        # (B,C,H,W) -> pooled -> flat
+        pooled = F.adaptive_avg_pool2d(x, self.embed_hw)
+        flat = pooled.flatten(1)
+        return flat[0].contiguous()
+
+    def _maybe_init_rnd(self, embed_dim: int) -> None:
+        if self._rnd_in_dim is not None:
+            return
+        self._rnd_in_dim = int(embed_dim)
+        self._rnd_target = nn.Sequential(
+            nn.Linear(self._rnd_in_dim, self._rnd_hidden),
+            nn.ReLU(),
+            nn.Linear(self._rnd_hidden, self._rnd_hidden),
+            nn.ReLU(),
+            nn.Linear(self._rnd_hidden, self._rnd_out_dim),
+        )
+        self._rnd_pred = nn.Sequential(
+            nn.Linear(self._rnd_in_dim, self._rnd_hidden),
+            nn.ReLU(),
+            nn.Linear(self._rnd_hidden, self._rnd_hidden),
+            nn.ReLU(),
+            nn.Linear(self._rnd_hidden, self._rnd_out_dim),
+        )
+        for p in self._rnd_target.parameters():
+            p.requires_grad_(False)
+        self._rnd_opt = torch.optim.Adam(self._rnd_pred.parameters(), lr=self._rnd_lr)
+
+    def reset(self, **kwargs):
+        obs, info = self.env.reset(**kwargs)
+        self._visit_counts = {}
+        self._prev_embed = self._embed(obs)
+        return obs, info
+
+    def step(self, action):
+        obs, reward, terminated, truncated, info = self.env.step(action)
+        if not isinstance(info, dict):
+            info = {}
+        else:
+            info = dict(info)
+
+        r_extrinsic = float(reward)
+
+        embed_next = self._embed(obs)
+        embed_prev = self._prev_embed
+        self._prev_embed = embed_next
+
+        r_curiosity = 0.0
+        r_novelty = 0.0
+        r_surprise = 0.0
+
+        if embed_next is not None:
+            # --- novelty (episodic) ---
+            try:
+                bits = (embed_next.detach().cpu().numpy() > 0).astype(np.uint8)
+                packed = np.packbits(bits)
+                key = packed.tobytes()[: self.novelty_hash_bytes]
+            except Exception:
+                key = None
+            if key is not None:
+                if len(self._visit_counts) < self.max_episode_novelty_states:
+                    c = self._visit_counts.get(key, 0) + 1
+                    self._visit_counts[key] = c
+                else:
+                    c = 1
+                r_novelty = 1.0 / float(np.sqrt(c))
+
+            # --- curiosity (RND) ---
+            if self.w_curiosity != 0.0:
+                self._maybe_init_rnd(int(embed_next.numel()))
+                assert self._rnd_target is not None and self._rnd_pred is not None and self._rnd_opt is not None
+                x = embed_next.detach().unsqueeze(0)
+                with torch.no_grad():
+                    y_t = self._rnd_target(x)
+                y_p = self._rnd_pred(x)
+                loss = torch.mean((y_p - y_t) ** 2)
+                r_curiosity_raw = float(loss.detach().cpu().item())
+                self._rnd_rms.update(r_curiosity_raw)
+                r_curiosity = r_curiosity_raw / self._rnd_rms.std()
+
+                self._rnd_opt.zero_grad(set_to_none=True)
+                loss.backward()
+                self._rnd_opt.step()
+
+        # --- state surprise (delta magnitude conditioned on action) ---
+        if embed_prev is not None and embed_next is not None and self.w_surprise != 0.0:
+            delta = (embed_next - embed_prev).detach()
+            delta_norm2 = float(torch.mean(delta * delta).cpu().item())
+            a = int(action) if np.isscalar(action) else int(np.asarray(action).item())
+            stats = self._per_action_stats.get(a)
+            if stats is None:
+                stats = _RunningMeanVar()
+                self._per_action_stats[a] = stats
+
+            # compute surprise before updating stats
+            z = (delta_norm2 - stats.mean) / stats.std()
+            r_surprise_raw = float(z * z)
+            stats.update(delta_norm2)
+
+            self._surprise_rms.update(r_surprise_raw)
+            r_surprise = r_surprise_raw / self._surprise_rms.std()
+
+        r_intrinsic = (
+            self.w_curiosity * float(r_curiosity)
+            + self.w_novelty * float(r_novelty)
+            + self.w_surprise * float(r_surprise)
+        )
+        if self.intrinsic_clip > 0:
+            r_intrinsic = float(np.clip(r_intrinsic, -self.intrinsic_clip, self.intrinsic_clip))
+
+        # Write info fields
+        info["r_extrinsic"] = r_extrinsic
+        info["r_intrinsic"] = float(r_intrinsic)
+        info["r_intrinsic_curiosity"] = float(r_curiosity)
+        info["r_intrinsic_novelty"] = float(r_novelty)
+        info["r_intrinsic_surprise"] = float(r_surprise)
+
+        if self.intrinsic_scale != 0.0:
+            reward = float(r_extrinsic + self.intrinsic_scale * r_intrinsic)
+
+        return obs, reward, terminated, truncated, info
+
+
 class InfoLogger(gym.Wrapper):
     def step(self, action):
         obs, reward, terminated, truncated, info = super().step(action)
@@ -421,6 +626,11 @@ def make_base_env(
     timm_model_name: Optional[str] = None,
     timm_data_cfg: Optional[dict[str, Any]] = None,
     reward_scale: float = 1.0,
+    intrinsic_enable: bool = False,
+    intrinsic_scale: float = 0.0,
+    intrinsic_w_curiosity: float = 1.0,
+    intrinsic_w_novelty: float = 1.0,
+    intrinsic_w_surprise: float = 1.0,
 ):
     env = retro.make(game=game, state=state, render_mode="rgb_array")
     env = PreprocessObsWrapper(
@@ -433,5 +643,13 @@ def make_base_env(
     env = ExtraInfoWrapper(env)
     env = LifeTerminationWrapper(env)
     env = RewardOverrideWrapper(env, reward_scale=reward_scale)
+    if intrinsic_enable or intrinsic_scale != 0.0:
+        env = IntrinsicRewardWrapper(
+            env,
+            intrinsic_scale=intrinsic_scale,
+            w_curiosity=intrinsic_w_curiosity,
+            w_novelty=intrinsic_w_novelty,
+            w_surprise=intrinsic_w_surprise,
+        )
     env = AuxObservationWrapper(env)
     return env

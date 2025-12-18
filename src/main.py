@@ -76,6 +76,22 @@ def parse_args() -> argparse.Namespace:
         help="Multiply shaped rewards by this factor (default: 1.0)",
     )
 
+    # Intrinsic rewards (curiosity/novelty/surprise)
+    parser.add_argument(
+        "--intrinsic-enable",
+        action="store_true",
+        help="Enable intrinsic rewards wrapper (curiosity/novelty/surprise)",
+    )
+    parser.add_argument(
+        "--intrinsic-scale",
+        type=float,
+        default=0.0,
+        help="Total intrinsic reward scale added to env reward (default: 0.0 = off)",
+    )
+    parser.add_argument("--intrinsic-w-curiosity", type=float, default=1.0, help="Weight for curiosity (RND)")
+    parser.add_argument("--intrinsic-w-novelty", type=float, default=1.0, help="Weight for novelty (episodic)")
+    parser.add_argument("--intrinsic-w-surprise", type=float, default=1.0, help="Weight for state surprise")
+
     return parser.parse_args()
 
 
@@ -143,6 +159,11 @@ def create_single_env(game: str, state: str):
         preprocess_mode="timm",
         timm_model_name=ARGS.backbone,
         reward_scale=ARGS.reward_scale,
+        intrinsic_enable=ARGS.intrinsic_enable,
+        intrinsic_scale=ARGS.intrinsic_scale,
+        intrinsic_w_curiosity=ARGS.intrinsic_w_curiosity,
+        intrinsic_w_novelty=ARGS.intrinsic_w_novelty,
+        intrinsic_w_surprise=ARGS.intrinsic_w_surprise,
     )
     vec_env = DummyVecEnv([lambda: env])
     return vec_env, env  # 返回兩者以便後續使用
@@ -169,6 +190,11 @@ def _make_train_env():
         preprocess_mode="timm",
         timm_model_name=ARGS.backbone,
         reward_scale=ARGS.reward_scale,
+        intrinsic_enable=ARGS.intrinsic_enable,
+        intrinsic_scale=ARGS.intrinsic_scale,
+        intrinsic_w_curiosity=ARGS.intrinsic_w_curiosity,
+        intrinsic_w_novelty=ARGS.intrinsic_w_novelty,
+        intrinsic_w_surprise=ARGS.intrinsic_w_surprise,
     )
 
 train_env = DummyVecEnv([_make_train_env])
@@ -178,7 +204,7 @@ print(f"Actions: {train_env.action_space}")
 
 # 2. Initialize Model with anti-local-optimum settings
 print("\n" + "=" * 60)
-print("Initializing PPO with 強力抗局部最優配置...")
+print("Initializing PPO...")
 print("=" * 60)
 
 model = CustomPPO(
