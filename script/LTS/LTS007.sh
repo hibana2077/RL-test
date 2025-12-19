@@ -35,6 +35,6 @@ python3 src/main.py \
 	--eval-max-steps 6000 \
 	--record-steps 3000 \
     --reward-scale 1 \
-	--log-dir "./runs_LTS006" \
+	--log-dir "./runs_LTS007" \
 	--device "cuda:0" \
-	>> LTS006.log 2>&1
+	>> LTS007.log 2>&1
