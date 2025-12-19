@@ -40,6 +40,6 @@ python3 src/main.py \
 	--intrinsic-w-curiosity 0.0 \
 	--intrinsic-w-novelty 0.0 \
 	--intrinsic-w-surprise 1.0 \
-	--log-dir "./runs_IR012" \
+	--log-dir "./runs_IR013" \
 	--device "cuda:0" \
-	>> IR012.log 2>&1
+	>> IR013.log 2>&1
