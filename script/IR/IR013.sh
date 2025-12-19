@@ -23,7 +23,7 @@ python3 src/main.py \
 	--total-steps 10000000 \
 	--train-chunk 25000 \
 	--n-envs 1 \
-	--n-steps 4096 \
+	--n-steps 5120 \
 	--batch-size 128 \
 	--n-epochs 10 \
 	--learning-rate 5e-4 \
