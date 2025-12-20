@@ -19,7 +19,7 @@ cd ../..
 python3 -m retro.import ./roms
 python3 src/main.py \
 	--game "SuperMarioWorld-Snes" \
-	--state "YoshiIsland4" \
+	--state "YoshiIsland1" \
 	--total-steps 10000000 \
 	--train-chunk 25000 \
 	--n-envs 1 \
@@ -40,8 +40,7 @@ python3 src/main.py \
 	--intrinsic-w-curiosity 0.0 \
 	--intrinsic-w-novelty 0.0 \
 	--intrinsic-w-surprise 1.0 \
-	--log-dir "./runs_IR015" \
+	--backbone "resnet50" \
+	--log-dir "./runs_IR016" \
 	--device "cuda:0" \
-	>> IR015.log 2>&1
-
-# python3 -c "import torch; print(torch.cuda.memory_summary())"
+	>> IR016.log 2>&1
