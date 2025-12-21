@@ -40,6 +40,7 @@ python3 src/main.py \
 	--intrinsic-w-curiosity 0.0 \
 	--intrinsic-w-novelty 0.0 \
 	--intrinsic-w-surprise 1.0 \
-	--log-dir "./runs_IR008" \
+	--backbone "resnet50" \
+	--log-dir "./runs_IR018" \
 	--device "cuda:0" \
-	>> IR008.log 2>&1
+	>> IR018.log 2>&1
