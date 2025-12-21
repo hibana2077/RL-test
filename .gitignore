@@ -209,3 +209,5 @@ __marimo__/
 
 *.mp4
 *.DS_Store
+*.zip
+submit/*
