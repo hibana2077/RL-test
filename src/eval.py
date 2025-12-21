@@ -122,15 +122,76 @@ def _format_info(info: dict, max_len: int = 120) -> str:
     return "{" + ", ".join(parts) + "}"
 
 
+def _format_info_lines(
+    info: dict,
+    *,
+    max_pairs_per_line: int = 2,
+    max_lines: int = 6,
+) -> list[str]:
+    """Format env `info` as multiple lines.
+
+    Requirement: each line contains at most `max_pairs_per_line` key=value fragments.
+    """
+    if not isinstance(info, dict) or not info:
+        return ["{}"]
+
+    fragments = [f"{k}={v}" for k, v in info.items()]
+    lines: list[str] = []
+    i = 0
+    while i < len(fragments) and len(lines) < max_lines:
+        chunk = fragments[i : i + max_pairs_per_line]
+        lines.append(", ".join(chunk))
+        i += max_pairs_per_line
+
+    if i < len(fragments):
+        if lines:
+            lines[-1] = lines[-1] + ", ..."
+        else:
+            lines.append("...")
+    return lines
+
+
+def _clip_text_to_width(draw: ImageDraw.ImageDraw, text: str, font: ImageFont.ImageFont, max_width: int) -> str:
+    if max_width <= 0:
+        return ""
+    bbox = draw.textbbox((0, 0), text, font=font)
+    if (bbox[2] - bbox[0]) <= max_width:
+        return text
+
+    ellipsis = "…"
+    # Binary search for the longest prefix that fits when suffixed with ellipsis.
+    lo, hi = 0, len(text)
+    best = ellipsis
+    while lo <= hi:
+        mid = (lo + hi) // 2
+        candidate = text[:mid].rstrip() + ellipsis
+        bbox = draw.textbbox((0, 0), candidate, font=font)
+        if (bbox[2] - bbox[0]) <= max_width:
+            best = candidate
+            lo = mid + 1
+        else:
+            hi = mid - 1
+    return best
+
+
 def _annotate_frame(frame: np.ndarray, cumulative_reward: float, last_reward: float, info: dict, font: ImageFont.ImageFont) -> np.ndarray:
     img = Image.fromarray(frame)
     draw = ImageDraw.Draw(img)
-    info_str = _format_info(info)
+    info_lines = _format_info_lines(info, max_pairs_per_line=2)
     lines = [
         f"reward={last_reward:.3f}",
         f"cum_reward={cumulative_reward:.3f}",
-        f"info: {info_str}",
     ]
+    if info_lines == ["{}"]:
+        lines.append("info: {}")
+    else:
+        lines.append(f"info: {info_lines[0]}")
+        for extra in info_lines[1:]:
+            lines.append(f"      {extra}")
+
+    # Ensure the overlay never renders beyond the frame width.
+    max_text_width = max(1, img.size[0] - (4 * 2))
+    lines = [_clip_text_to_width(draw, line, font, max_text_width) for line in lines]
     padding = 4
     bbox_sample = draw.textbbox((0, 0), "Ag", font=font)
     line_height = bbox_sample[3] - bbox_sample[1]
@@ -138,7 +199,7 @@ def _annotate_frame(frame: np.ndarray, cumulative_reward: float, last_reward: fl
     for line in lines:
         bbox = draw.textbbox((0, 0), line, font=font)
         line_widths.append(bbox[2] - bbox[0])
-    box_width = max(line_widths) + padding * 2
+    box_width = min(max(line_widths) + padding * 2, img.size[0])
     box_height = line_height * len(lines) + padding * (len(lines) + 1)
     draw.rectangle([0, 0, box_width, box_height], fill=(0, 0, 0, 200))
     y = padding
