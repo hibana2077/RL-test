@@ -181,10 +181,14 @@ class ExtraInfoWrapper(gym.Wrapper):
     # In SMW RAM, $0094 stores the low byte and $0095 stores the high byte.
     X_POS_LOW = 0x0094
     X_POS_HIGH = 0x0095
+    # In SMW RAM, $0096 stores the low byte and $0097 stores the high byte.
+    Y_POS_LOW = 0x0096
+    Y_POS_HIGH = 0x0097
 
     def __init__(self, env):
         super().__init__(env)
         self._episode_start_x = None
+        self._episode_start_y = None
 
     def _get_ram(self):
         base_env = self.env.unwrapped
@@ -207,11 +211,19 @@ class ExtraInfoWrapper(gym.Wrapper):
         high = int(ram[self.X_POS_HIGH])
         return (high << 8) | low
 
+    def _read_y_pos(self, ram):
+        if ram is None:
+            return None
+        low = int(ram[self.Y_POS_LOW])
+        high = int(ram[self.Y_POS_HIGH])
+        return (high << 8) | low
+
     def _inject_extra(self, info):
         ram = self._get_ram()
         time_left = self._read_time_left(ram)
         x_pos = self._read_x_pos(ram)
-        if time_left is None and x_pos is None:
+        y_pos = self._read_y_pos(ram)
+        if time_left is None and x_pos is None and y_pos is None:
             return info
         if not isinstance(info, dict):
             info = {}
@@ -223,10 +235,17 @@ class ExtraInfoWrapper(gym.Wrapper):
             if self._episode_start_x is None:
                 self._episode_start_x = x_pos
             info["x_pos"] = max(0, x_pos - self._episode_start_x)
+        if y_pos is not None:
+            # Keep both raw and delta (signed) so downstream shaping can decide direction.
+            if self._episode_start_y is None:
+                self._episode_start_y = y_pos
+            info["y_pos_raw"] = int(y_pos)
+            info["y_pos_delta"] = float(y_pos - self._episode_start_y)
         return info
 
     def reset(self, **kwargs):
         self._episode_start_x = None
+        self._episode_start_y = None
         obs, info = self.env.reset(**kwargs)
         info = self._inject_extra(info)
         return obs, info
@@ -302,12 +321,69 @@ class RewardOverrideWrapper(gym.Wrapper):
         reward_scale: float = 1.0,
         # === 終局處理 ===
         death_penalty: float = -15.0,
+        # === Secret path bonus (optional; default off) ===
+        secret_bonus: float = 0.0,
+        secret_x_min: Optional[float] = None,
+        secret_x_max: Optional[float] = None,
+        secret_y_delta: Optional[float] = None,
+        secret_y_mode: str = "down",  # 'down' (y_delta>=thr), 'up' (y_delta<=-thr), 'any' (abs>=thr)
+        # === Secret path shaping (staged; optional; default off) ===
+        # Stage 1: reach above entrance (x window + y_raw window) -> one-time bonus
+        secret_stage1_bonus: float = 0.0,
+        secret_stage1_x_min: Optional[float] = None,
+        secret_stage1_x_max: Optional[float] = None,
+        secret_stage1_y_raw_min: Optional[int] = None,
+        secret_stage1_y_raw_max: Optional[int] = None,
+        # Stage 2: after stage1, reward first N spin attempts (spin inferred by button name inside combo)
+        secret_stage2_spin_bonus: float = 0.0,
+        secret_stage2_spin_button: str = "A",
+        secret_stage2_spin_required: int = 2,
+        # Stage 3: actually enter/fall (x window + y_delta threshold) -> one-time bonus
+        secret_stage3_bonus: float = 0.0,
+        secret_stage3_x_min: Optional[float] = None,
+        secret_stage3_x_max: Optional[float] = None,
+        secret_stage3_y_delta: Optional[float] = None,
+        secret_stage3_y_mode: str = "down",
     ):
         super().__init__(env)
 
         # Keep signature compatibility; only the following are used for baseline reward.
         self.reward_scale = float(reward_scale)
         self.death_penalty = float(death_penalty)
+
+        self.secret_bonus = float(secret_bonus)
+        self.secret_x_min = None if secret_x_min is None else float(secret_x_min)
+        self.secret_x_max = None if secret_x_max is None else float(secret_x_max)
+        self.secret_y_delta = None if secret_y_delta is None else float(secret_y_delta)
+        if secret_y_mode not in {"down", "up", "any"}:
+            raise ValueError("secret_y_mode must be one of: 'down', 'up', 'any'")
+        self.secret_y_mode = str(secret_y_mode)
+
+        # Staged shaping config (preferred). If stage3 fields are left at defaults,
+        # legacy secret_* fields act as a fallback.
+        self.secret_stage1_bonus = float(secret_stage1_bonus)
+        self.secret_stage1_x_min = None if secret_stage1_x_min is None else float(secret_stage1_x_min)
+        self.secret_stage1_x_max = None if secret_stage1_x_max is None else float(secret_stage1_x_max)
+        self.secret_stage1_y_raw_min = None if secret_stage1_y_raw_min is None else int(secret_stage1_y_raw_min)
+        self.secret_stage1_y_raw_max = None if secret_stage1_y_raw_max is None else int(secret_stage1_y_raw_max)
+
+        self.secret_stage2_spin_bonus = float(secret_stage2_spin_bonus)
+        self.secret_stage2_spin_button = str(secret_stage2_spin_button)
+        self.secret_stage2_spin_required = max(0, int(secret_stage2_spin_required))
+
+        self.secret_stage3_bonus = float(secret_stage3_bonus)
+        self.secret_stage3_x_min = None if secret_stage3_x_min is None else float(secret_stage3_x_min)
+        self.secret_stage3_x_max = None if secret_stage3_x_max is None else float(secret_stage3_x_max)
+        self.secret_stage3_y_delta = None if secret_stage3_y_delta is None else float(secret_stage3_y_delta)
+        if secret_stage3_y_mode not in {"down", "up", "any"}:
+            raise ValueError("secret_stage3_y_mode must be one of: 'down', 'up', 'any'")
+        self.secret_stage3_y_mode = str(secret_stage3_y_mode)
+
+        self._secret_stage1_done = False
+        self._secret_stage2_count = 0
+        self._secret_stage3_done = False
+
+        self._secret_given = False
 
         self._prev_x_pos: Optional[float] = None
         self._prev_time_left: Optional[float] = None
@@ -323,6 +399,10 @@ class RewardOverrideWrapper(gym.Wrapper):
         if not isinstance(info, dict):
             info = {}
         self._reset_trackers(info)
+        self._secret_given = False
+        self._secret_stage1_done = False
+        self._secret_stage2_count = 0
+        self._secret_stage3_done = False
         return obs, info
 
     def step(self, action):
@@ -352,6 +432,128 @@ class RewardOverrideWrapper(gym.Wrapper):
         # d = death penalty (on death step)
         if info.get("death", False):
             reward += self.death_penalty
+
+        # -----------------
+        # Secret path shaping (staged)
+        # -----------------
+        x_pos = info.get("x_pos", None)
+        y_raw = info.get("y_pos_raw", None)
+        y_delta = info.get("y_pos_delta", None)
+
+        # Stage 1: reach above entrance (x + y_raw window)
+        if (
+            self.secret_stage1_bonus != 0.0
+            and not self._secret_stage1_done
+            and x_pos is not None
+            and y_raw is not None
+        ):
+            x = float(x_pos)
+            y = int(y_raw)
+            x_ok = True
+            if self.secret_stage1_x_min is not None and x < self.secret_stage1_x_min:
+                x_ok = False
+            if self.secret_stage1_x_max is not None and x > self.secret_stage1_x_max:
+                x_ok = False
+            y_ok = True
+            if self.secret_stage1_y_raw_min is not None and y < self.secret_stage1_y_raw_min:
+                y_ok = False
+            if self.secret_stage1_y_raw_max is not None and y > self.secret_stage1_y_raw_max:
+                y_ok = False
+
+            if x_ok and y_ok:
+                reward += self.secret_stage1_bonus
+                self._secret_stage1_done = True
+                info = dict(info)
+                info["secret_stage1"] = True
+                info["secret_stage1_bonus"] = float(self.secret_stage1_bonus)
+
+        # Stage 2: reward first N spin attempts after stage1
+        if (
+            self.secret_stage2_spin_bonus != 0.0
+            and self._secret_stage1_done
+            and self.secret_stage2_spin_required > 0
+            and self._secret_stage2_count < self.secret_stage2_spin_required
+        ):
+            act_i = int(action) if np.isscalar(action) else int(np.asarray(action).item())
+            try:
+                combo = COMBOS[act_i]
+            except Exception:
+                combo = None
+            if isinstance(combo, (list, tuple)) and (self.secret_stage2_spin_button in combo):
+                reward += self.secret_stage2_spin_bonus
+                self._secret_stage2_count += 1
+                info = dict(info)
+                info["secret_stage2_spin"] = True
+                info["secret_stage2_spin_count"] = int(self._secret_stage2_count)
+                info["secret_stage2_spin_bonus"] = float(self.secret_stage2_spin_bonus)
+
+        # Stage 3: enter/fall into secret path.
+        # Prefer staged config; fall back to legacy secret_* if staged left unset.
+        stage3_bonus = self.secret_stage3_bonus if self.secret_stage3_bonus != 0.0 else self.secret_bonus
+        stage3_x_min = self.secret_stage3_x_min if self.secret_stage3_x_min is not None else self.secret_x_min
+        stage3_x_max = self.secret_stage3_x_max if self.secret_stage3_x_max is not None else self.secret_x_max
+        stage3_y_delta = self.secret_stage3_y_delta if self.secret_stage3_y_delta is not None else self.secret_y_delta
+        stage3_y_mode = self.secret_stage3_y_mode if self.secret_stage3_bonus != 0.0 or self.secret_stage3_y_delta is not None else self.secret_y_mode
+
+        if (
+            stage3_bonus != 0.0
+            and not self._secret_stage3_done
+            and (stage3_y_delta is not None)
+            and (y_delta is not None)
+        ):
+            x_ok = True
+            if (stage3_x_min is not None or stage3_x_max is not None) and (x_pos is not None):
+                x = float(x_pos)
+                if stage3_x_min is not None and x < stage3_x_min:
+                    x_ok = False
+                if stage3_x_max is not None and x > stage3_x_max:
+                    x_ok = False
+            thr = float(stage3_y_delta)
+            yd = float(y_delta)
+            if stage3_y_mode == "down":
+                y_ok = yd >= thr
+            elif stage3_y_mode == "up":
+                y_ok = yd <= -thr
+            else:
+                y_ok = abs(yd) >= thr
+
+            if x_ok and y_ok:
+                reward += float(stage3_bonus)
+                self._secret_stage3_done = True
+                info = dict(info)
+                info["secret_stage3"] = True
+                info["secret_stage3_bonus"] = float(stage3_bonus)
+
+        # Optional: one-time bonus when entering a "secret" path region.
+        # This is intentionally simple and uses only info fields produced by ExtraInfoWrapper.
+        if (
+            self.secret_bonus != 0.0
+            and not self._secret_given
+            and (self.secret_y_delta is not None)
+            and ("y_pos_delta" in info)
+        ):
+            x_ok = True
+            if (self.secret_x_min is not None or self.secret_x_max is not None) and ("x_pos" in info):
+                x = float(info.get("x_pos", 0.0))
+                if self.secret_x_min is not None and x < self.secret_x_min:
+                    x_ok = False
+                if self.secret_x_max is not None and x > self.secret_x_max:
+                    x_ok = False
+            y_delta = float(info.get("y_pos_delta", 0.0))
+            thr = float(self.secret_y_delta)
+            if self.secret_y_mode == "down":
+                y_ok = y_delta >= thr
+            elif self.secret_y_mode == "up":
+                y_ok = y_delta <= -thr
+            else:
+                y_ok = abs(y_delta) >= thr
+
+            if x_ok and y_ok:
+                reward += self.secret_bonus
+                self._secret_given = True
+                info = dict(info)
+                info["secret_trigger"] = True
+                info["secret_bonus"] = float(self.secret_bonus)
 
         # clip to [-15, 15]
         reward = float(np.clip(reward, -15.0, 15.0))
@@ -608,14 +810,14 @@ COMBOS = [
     ["RIGHT"],           # 1: 走右
     ["LEFT"],            # 2: 走左(可選)
     ["DOWN"],            # 3: 下蹲
-    ["A"],               # 4: 跳
+    ["A"],               # 4: A (often spin jump in SMW)
     ["B"],               # 5: 跑
     ["RIGHT", "A"],      # 6: 右 + 跳
     ["RIGHT", "B"],      # 7: 右 + 跑
     ["RIGHT", "A", "B"], # 8: 右 + 跳 + 跑
-    ["LEFT", "A"],       # 10: 左 + 跳
-    ["LEFT", "B"],       # 11: 左 + 跑
-    ["LEFT", "A", "B"],  # 12: 左 + 跳 + 跑
+    ["LEFT", "A"],       # 9: 左 + A
+    ["LEFT", "B"],       # 10: 左 + B
+    ["LEFT", "A", "B"],  # 11: 左 + A + B
 ]
 import retro
 def make_base_env(
@@ -626,6 +828,26 @@ def make_base_env(
     timm_model_name: Optional[str] = None,
     timm_data_cfg: Optional[dict[str, Any]] = None,
     reward_scale: float = 1.0,
+    # Secret path shaping (optional)
+    secret_bonus: float = 0.0,
+    secret_x_min: Optional[float] = None,
+    secret_x_max: Optional[float] = None,
+    secret_y_delta: Optional[float] = None,
+    secret_y_mode: str = "down",
+    # Secret path shaping (staged; optional)
+    secret_stage1_bonus: float = 0.0,
+    secret_stage1_x_min: Optional[float] = None,
+    secret_stage1_x_max: Optional[float] = None,
+    secret_stage1_y_raw_min: Optional[int] = None,
+    secret_stage1_y_raw_max: Optional[int] = None,
+    secret_stage2_spin_bonus: float = 0.0,
+    secret_stage2_spin_button: str = "A",
+    secret_stage2_spin_required: int = 2,
+    secret_stage3_bonus: float = 0.0,
+    secret_stage3_x_min: Optional[float] = None,
+    secret_stage3_x_max: Optional[float] = None,
+    secret_stage3_y_delta: Optional[float] = None,
+    secret_stage3_y_mode: str = "down",
     intrinsic_enable: bool = False,
     intrinsic_scale: float = 0.0,
     intrinsic_w_curiosity: float = 1.0,
@@ -642,7 +864,28 @@ def make_base_env(
     env = DiscreteActionWrapper(env, COMBOS)
     env = ExtraInfoWrapper(env)
     env = LifeTerminationWrapper(env)
-    env = RewardOverrideWrapper(env, reward_scale=reward_scale)
+    env = RewardOverrideWrapper(
+        env,
+        reward_scale=reward_scale,
+        secret_bonus=secret_bonus,
+        secret_x_min=secret_x_min,
+        secret_x_max=secret_x_max,
+        secret_y_delta=secret_y_delta,
+        secret_y_mode=secret_y_mode,
+        secret_stage1_bonus=secret_stage1_bonus,
+        secret_stage1_x_min=secret_stage1_x_min,
+        secret_stage1_x_max=secret_stage1_x_max,
+        secret_stage1_y_raw_min=secret_stage1_y_raw_min,
+        secret_stage1_y_raw_max=secret_stage1_y_raw_max,
+        secret_stage2_spin_bonus=secret_stage2_spin_bonus,
+        secret_stage2_spin_button=secret_stage2_spin_button,
+        secret_stage2_spin_required=secret_stage2_spin_required,
+        secret_stage3_bonus=secret_stage3_bonus,
+        secret_stage3_x_min=secret_stage3_x_min,
+        secret_stage3_x_max=secret_stage3_x_max,
+        secret_stage3_y_delta=secret_stage3_y_delta,
+        secret_stage3_y_mode=secret_stage3_y_mode,
+    )
     if intrinsic_enable or intrinsic_scale != 0.0:
         env = IntrinsicRewardWrapper(
             env,

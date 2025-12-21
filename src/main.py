@@ -76,6 +76,67 @@ def parse_args() -> argparse.Namespace:
         help="Multiply shaped rewards by this factor (default: 1.0)",
     )
 
+    # Secret path shaping (optional)
+    parser.add_argument(
+        "--secret-bonus",
+        type=float,
+        default=0.0,
+        help="[legacy] One-time bonus when entering secret path region (default: 0.0 = off)",
+    )
+    parser.add_argument(
+        "--secret-x-min",
+        type=float,
+        default=None,
+        help="Min x_pos (relative) for secret trigger (default: None)",
+    )
+    parser.add_argument(
+        "--secret-x-max",
+        type=float,
+        default=None,
+        help="Max x_pos (relative) for secret trigger (default: None)",
+    )
+    parser.add_argument(
+        "--secret-y-delta",
+        type=float,
+        default=None,
+        help="Threshold on y_pos_delta for secret trigger (default: None)",
+    )
+    parser.add_argument(
+        "--secret-y-mode",
+        type=str,
+        default="down",
+        choices=["down", "up", "any"],
+        help="[legacy] How to interpret y_pos_delta vs threshold: down/up/any (default: down)",
+    )
+
+    # Secret path shaping (staged; recommended)
+    parser.add_argument("--secret-stage1-bonus", type=float, default=0.0, help="Stage1 bonus on reaching above entrance")
+    parser.add_argument("--secret-stage1-x-min", type=float, default=None, help="Stage1 x_pos min")
+    parser.add_argument("--secret-stage1-x-max", type=float, default=None, help="Stage1 x_pos max")
+    parser.add_argument("--secret-stage1-y-raw-min", type=int, default=None, help="Stage1 y_pos_raw min")
+    parser.add_argument("--secret-stage1-y-raw-max", type=int, default=None, help="Stage1 y_pos_raw max")
+
+    parser.add_argument("--secret-stage2-spin-bonus", type=float, default=0.0, help="Stage2 bonus per spin attempt")
+    parser.add_argument(
+        "--secret-stage2-spin-button",
+        type=str,
+        default="A",
+        help="Button name that indicates spin jump in COMBOS (default: A)",
+    )
+    parser.add_argument("--secret-stage2-spin-required", type=int, default=2, help="How many spin attempts to reward")
+
+    parser.add_argument("--secret-stage3-bonus", type=float, default=0.0, help="Stage3 bonus when actually entering/falling")
+    parser.add_argument("--secret-stage3-x-min", type=float, default=None, help="Stage3 x_pos min")
+    parser.add_argument("--secret-stage3-x-max", type=float, default=None, help="Stage3 x_pos max")
+    parser.add_argument("--secret-stage3-y-delta", type=float, default=None, help="Stage3 threshold on y_pos_delta")
+    parser.add_argument(
+        "--secret-stage3-y-mode",
+        type=str,
+        default="down",
+        choices=["down", "up", "any"],
+        help="Stage3 y_pos_delta mode (down/up/any)",
+    )
+
     # Intrinsic rewards (curiosity/novelty/surprise)
     parser.add_argument(
         "--intrinsic-enable",
@@ -159,6 +220,26 @@ def create_single_env(game: str, state: str):
         preprocess_mode="timm",
         timm_model_name=ARGS.backbone,
         reward_scale=ARGS.reward_scale,
+        # legacy
+        secret_bonus=ARGS.secret_bonus,
+        secret_x_min=ARGS.secret_x_min,
+        secret_x_max=ARGS.secret_x_max,
+        secret_y_delta=ARGS.secret_y_delta,
+        secret_y_mode=ARGS.secret_y_mode,
+        # staged
+        secret_stage1_bonus=ARGS.secret_stage1_bonus,
+        secret_stage1_x_min=ARGS.secret_stage1_x_min,
+        secret_stage1_x_max=ARGS.secret_stage1_x_max,
+        secret_stage1_y_raw_min=ARGS.secret_stage1_y_raw_min,
+        secret_stage1_y_raw_max=ARGS.secret_stage1_y_raw_max,
+        secret_stage2_spin_bonus=ARGS.secret_stage2_spin_bonus,
+        secret_stage2_spin_button=ARGS.secret_stage2_spin_button,
+        secret_stage2_spin_required=ARGS.secret_stage2_spin_required,
+        secret_stage3_bonus=ARGS.secret_stage3_bonus,
+        secret_stage3_x_min=ARGS.secret_stage3_x_min,
+        secret_stage3_x_max=ARGS.secret_stage3_x_max,
+        secret_stage3_y_delta=ARGS.secret_stage3_y_delta,
+        secret_stage3_y_mode=ARGS.secret_stage3_y_mode,
         intrinsic_enable=ARGS.intrinsic_enable,
         intrinsic_scale=ARGS.intrinsic_scale,
         intrinsic_w_curiosity=ARGS.intrinsic_w_curiosity,
@@ -190,6 +271,26 @@ def _make_train_env():
         preprocess_mode="timm",
         timm_model_name=ARGS.backbone,
         reward_scale=ARGS.reward_scale,
+        # legacy
+        secret_bonus=ARGS.secret_bonus,
+        secret_x_min=ARGS.secret_x_min,
+        secret_x_max=ARGS.secret_x_max,
+        secret_y_delta=ARGS.secret_y_delta,
+        secret_y_mode=ARGS.secret_y_mode,
+        # staged
+        secret_stage1_bonus=ARGS.secret_stage1_bonus,
+        secret_stage1_x_min=ARGS.secret_stage1_x_min,
+        secret_stage1_x_max=ARGS.secret_stage1_x_max,
+        secret_stage1_y_raw_min=ARGS.secret_stage1_y_raw_min,
+        secret_stage1_y_raw_max=ARGS.secret_stage1_y_raw_max,
+        secret_stage2_spin_bonus=ARGS.secret_stage2_spin_bonus,
+        secret_stage2_spin_button=ARGS.secret_stage2_spin_button,
+        secret_stage2_spin_required=ARGS.secret_stage2_spin_required,
+        secret_stage3_bonus=ARGS.secret_stage3_bonus,
+        secret_stage3_x_min=ARGS.secret_stage3_x_min,
+        secret_stage3_x_max=ARGS.secret_stage3_x_max,
+        secret_stage3_y_delta=ARGS.secret_stage3_y_delta,
+        secret_stage3_y_mode=ARGS.secret_stage3_y_mode,
         intrinsic_enable=ARGS.intrinsic_enable,
         intrinsic_scale=ARGS.intrinsic_scale,
         intrinsic_w_curiosity=ARGS.intrinsic_w_curiosity,
