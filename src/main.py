@@ -9,14 +9,14 @@ import argparse
 # 重新載入模組以確保使用最新的代碼
 import importlib
 import wrappers
-import policy
+import custom_policy
 import eval as eval_module
 importlib.reload(wrappers)
-importlib.reload(policy)
+importlib.reload(custom_policy)
 importlib.reload(eval_module)
 
 from wrappers import make_base_env
-from policy import VisionBackbonePolicy, CustomPPO
+from custom_policy import VisionBackbonePolicy, CustomPPO
 from eval import evaluate_policy, record_video
 
 # 檢查 GPU

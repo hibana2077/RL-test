@@ -2,7 +2,7 @@ import os
 import argparse
 from typing import Tuple, Optional
 import numpy as np
-from policy import CustomPPO
+from custom_policy import CustomPPO
 from PIL import Image, ImageDraw, ImageFont
 import imageio.v2 as imageio
 from wrappers import make_base_env
