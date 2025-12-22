@@ -1,5 +1,5 @@
 #!/bin/bash
-#PBS -P rp06
+#PBS -P kf09
 #PBS -q gpuhopper
 #PBS -l ngpus=1            
 #PBS -l ncpus=12            
