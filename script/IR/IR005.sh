@@ -47,6 +47,6 @@ python3 src/main.py \
 	--secret-stage2-spin-required 2 \
 	--secret-stage2-spin-button A \
 	--secret-stage3-bonus 10 \
-	--log-dir "./runs_IR004" \
+	--log-dir "./runs_IR005" \
 	--device "cuda:0" \
-	>> IR004.log 2>&1
+	>> IR005.log 2>&1
