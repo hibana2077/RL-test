@@ -72,11 +72,18 @@ def _select_info_items(info: dict) -> list[str]:
 
     preferred = [
         "x_pos",
+        "x_pos_delta",
         "time_left",
         "y_pos_raw",
         "y_pos_delta",
+        "y_pos_delta_step",
         "lives",
         "score",
+        "coins",
+        "player_dir",
+        "slope_type",
+        "speed",
+        "accel",
         "intrinsic_reward",
         "death",
     ]

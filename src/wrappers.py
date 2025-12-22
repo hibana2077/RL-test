@@ -181,10 +181,19 @@ class ExtraInfoWrapper(gym.Wrapper):
     Y_POS_LOW = 0x0096
     Y_POS_HIGH = 0x0097
 
+    # Extra RAM signals (SMW)
+    SLOPE_TYPE = 0x13E1  # 1 byte
+    PLAYER_DIR = 0x0076  # 1 byte: 0=left, 1=right
+    COIN_COUNT = 0x0DBF  # 1 byte
+
     def __init__(self, env):
         super().__init__(env)
         self._episode_start_x = None
         self._episode_start_y = None
+
+        self._prev_x_pos = None
+        self._prev_y_pos = None
+        self._prev_speed = None
 
     def _get_ram(self):
         base_env = self.env.unwrapped
@@ -199,6 +208,14 @@ class ExtraInfoWrapper(gym.Wrapper):
         tens = int(ram[self.TIMER_TENS]) & 0x0F
         ones = int(ram[self.TIMER_ONES]) & 0x0F
         return hundreds * 100 + tens * 10 + ones
+
+    def _read_u8(self, ram, addr: int):
+        if ram is None:
+            return None
+        try:
+            return int(ram[addr]) & 0xFF
+        except Exception:
+            return None
 
     def _read_x_pos(self, ram):
         if ram is None:
@@ -219,7 +236,18 @@ class ExtraInfoWrapper(gym.Wrapper):
         time_left = self._read_time_left(ram)
         x_pos = self._read_x_pos(ram)
         y_pos = self._read_y_pos(ram)
-        if time_left is None and x_pos is None and y_pos is None:
+        slope_type = self._read_u8(ram, self.SLOPE_TYPE)
+        player_dir = self._read_u8(ram, self.PLAYER_DIR)
+        coin_count = self._read_u8(ram, self.COIN_COUNT)
+
+        if (
+            time_left is None
+            and x_pos is None
+            and y_pos is None
+            and slope_type is None
+            and player_dir is None
+            and coin_count is None
+        ):
             return info
         if not isinstance(info, dict):
             info = {}
@@ -230,17 +258,52 @@ class ExtraInfoWrapper(gym.Wrapper):
         if x_pos is not None:
             if self._episode_start_x is None:
                 self._episode_start_x = x_pos
-            info["x_pos"] = max(0, x_pos - self._episode_start_x)
+            x_rel = max(0, x_pos - self._episode_start_x)
+            info["x_pos"] = x_rel
+
+            if self._prev_x_pos is not None:
+                info["x_pos_delta"] = float(x_rel - self._prev_x_pos)
+            else:
+                info["x_pos_delta"] = 0.0
+            self._prev_x_pos = float(x_rel)
         if y_pos is not None:
             if self._episode_start_y is None:
                 self._episode_start_y = y_pos
             info["y_pos_raw"] = int(y_pos)
-            info["y_pos_delta"] = float(y_pos - self._episode_start_y)
+            y_delta = float(y_pos - self._episode_start_y)
+            info["y_pos_delta"] = y_delta
+
+            if self._prev_y_pos is not None:
+                info["y_pos_delta_step"] = float(y_delta - self._prev_y_pos)
+            else:
+                info["y_pos_delta_step"] = 0.0
+            self._prev_y_pos = float(y_delta)
+
+        # speed/accel (best-effort): use per-step deltas when available
+        dx = float(info.get("x_pos_delta", 0.0))
+        dy = float(info.get("y_pos_delta_step", 0.0))
+        speed = float(np.sqrt(dx * dx + dy * dy))
+        info["speed"] = speed
+        if self._prev_speed is not None:
+            info["accel"] = float(speed - self._prev_speed)
+        else:
+            info["accel"] = 0.0
+        self._prev_speed = speed
+
+        if slope_type is not None:
+            info["slope_type"] = int(slope_type)
+        if player_dir is not None:
+            info["player_dir"] = int(player_dir)
+        if coin_count is not None:
+            info["coins"] = int(coin_count)
         return info
 
     def reset(self, **kwargs):
         self._episode_start_x = None
         self._episode_start_y = None
+        self._prev_x_pos = None
+        self._prev_y_pos = None
+        self._prev_speed = None
         obs, info = self.env.reset(**kwargs)
         info = self._inject_extra(info)
         return obs, info
@@ -253,18 +316,45 @@ class ExtraInfoWrapper(gym.Wrapper):
 
 class AuxObservationWrapper(gym.Wrapper):
     """
-    Convert image observations into a dict that also exposes scalar features (step/time).
+    Convert image observations into a dict that also exposes scalar features.
+
+    Scalars are normalized/clipped for stability.
     """
 
-    def __init__(self, env, step_normalizer: float = 18000.0, time_normalizer: float = 300.0):
+    def __init__(
+        self,
+        env,
+        step_normalizer: float = 18000.0,
+        time_normalizer: float = 300.0,
+        x_pos_normalizer: float = 8192.0,
+        x_delta_normalizer: float = 16.0,
+        y_delta_normalizer: float = 512.0,
+        lives_normalizer: float = 99.0,
+        score_normalizer: float = 1_000_000.0,
+        coins_normalizer: float = 99.0,
+        speed_normalizer: float = 16.0,
+        accel_normalizer: float = 8.0,
+    ):
         super().__init__(env)
         if not isinstance(env.observation_space, gym.spaces.Box):
             raise TypeError("AuxObservationWrapper expects a Box observation space as the image input")
         self.image_space = env.observation_space
         self.step_normalizer = max(step_normalizer, 1.0)
         self.time_normalizer = max(time_normalizer, 1.0)
-        scalar_low = np.full((2,), -np.inf, dtype=np.float32)
-        scalar_high = np.full((2,), np.inf, dtype=np.float32)
+        self.x_pos_normalizer = max(x_pos_normalizer, 1.0)
+        self.x_delta_normalizer = max(x_delta_normalizer, 1e-6)
+        self.y_delta_normalizer = max(y_delta_normalizer, 1.0)
+        self.lives_normalizer = max(lives_normalizer, 1.0)
+        self.score_normalizer = max(score_normalizer, 1.0)
+        self.coins_normalizer = max(coins_normalizer, 1.0)
+        self.speed_normalizer = max(speed_normalizer, 1e-6)
+        self.accel_normalizer = max(accel_normalizer, 1e-6)
+
+        # Scalars (12):
+        # [step, time_left, x_pos, x_pos_delta, y_pos_delta, lives, score, coins, player_dir, slope_type, speed, accel]
+        self._scalar_dim = 12
+        scalar_low = np.full((self._scalar_dim,), -np.inf, dtype=np.float32)
+        scalar_high = np.full((self._scalar_dim,), np.inf, dtype=np.float32)
         self.observation_space = gym.spaces.Dict(
             {
                 "image": self.image_space,
@@ -272,16 +362,67 @@ class AuxObservationWrapper(gym.Wrapper):
             }
         )
         self._step_count = 0
+        self._prev_speed = 0.0
+
+    def _f(self, info, key: str, default: float = 0.0) -> float:
+        if not isinstance(info, dict):
+            return float(default)
+        v = info.get(key, default)
+        try:
+            return float(v)
+        except Exception:
+            return float(default)
 
     def _make_obs(self, obs, info):
-        time_left = float(info.get("time_left", 0.0)) if isinstance(info, dict) else 0.0
-        time_feat = np.clip(time_left / self.time_normalizer, 0.0, 1.0)
+        time_left = self._f(info, "time_left", 0.0)
+        x_pos = self._f(info, "x_pos", 0.0)
+        x_pos_delta = self._f(info, "x_pos_delta", 0.0)
+        y_pos_delta = self._f(info, "y_pos_delta", 0.0)
+        lives = self._f(info, "lives", 0.0)
+        score = self._f(info, "score", 0.0)
+        coins = self._f(info, "coins", 0.0)
+        player_dir = self._f(info, "player_dir", 0.0)
+        slope_type = self._f(info, "slope_type", 0.0)
+        speed = self._f(info, "speed", 0.0)
+
         step_feat = np.clip(self._step_count / self.step_normalizer, 0.0, 1.0)
-        scalars = np.array([step_feat, time_feat], dtype=np.float32)
+        time_feat = np.clip(time_left / self.time_normalizer, 0.0, 1.0)
+        x_pos_feat = np.clip(x_pos / self.x_pos_normalizer, 0.0, 1.0)
+        x_delta_feat = np.clip(x_pos_delta / self.x_delta_normalizer, -1.0, 1.0)
+        y_delta_feat = np.clip(y_pos_delta / self.y_delta_normalizer, -1.0, 1.0)
+        lives_feat = np.clip(lives / self.lives_normalizer, 0.0, 1.0)
+        score_feat = np.clip(score / self.score_normalizer, 0.0, 1.0)
+        coins_feat = np.clip(coins / self.coins_normalizer, 0.0, 1.0)
+        player_dir_feat = np.clip(player_dir, 0.0, 1.0)
+        slope_feat = np.clip(slope_type / 255.0, 0.0, 1.0)
+        speed_feat = np.clip(speed / self.speed_normalizer, 0.0, 1.0)
+
+        accel = float(speed - float(self._prev_speed))
+        self._prev_speed = float(speed)
+        accel_feat = np.clip(accel / self.accel_normalizer, -1.0, 1.0)
+
+        scalars = np.array(
+            [
+                step_feat,
+                time_feat,
+                x_pos_feat,
+                x_delta_feat,
+                y_delta_feat,
+                lives_feat,
+                score_feat,
+                coins_feat,
+                player_dir_feat,
+                slope_feat,
+                speed_feat,
+                accel_feat,
+            ],
+            dtype=np.float32,
+        )
         return {"image": obs, "scalars": scalars}
 
     def reset(self, **kwargs):
         self._step_count = 0
+        self._prev_speed = 0.0
         obs, info = self.env.reset(**kwargs)
         return self._make_obs(obs, info), info
 
