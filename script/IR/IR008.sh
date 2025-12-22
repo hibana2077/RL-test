@@ -40,7 +40,7 @@ python3 src/main.py \
 	--intrinsic-w-curiosity 0.1 \
 	--intrinsic-w-novelty 0.1 \
 	--intrinsic-w-surprise 0.8 \
-	--backbone "ecaresnet101d.miil_in1k" \
+	--backbone "resnet101.a1h_in1k" \
 	--secret-stage1-bonus 2 \
 	--secret-stage1-x-min 1886 --secret-stage1-x-max 1944 \
 	--secret-stage2-spin-bonus 0.5 \
