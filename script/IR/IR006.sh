@@ -1,8 +1,8 @@
 #!/bin/bash
 #PBS -P kf09
-#PBS -q gpuhopper
+#PBS -q dgxa100
 #PBS -l ngpus=1            
-#PBS -l ncpus=12            
+#PBS -l ncpus=16            
 #PBS -l mem=32GB           
 #PBS -l walltime=38:00:00  
 #PBS -l wd                  
@@ -40,13 +40,13 @@ python3 src/main.py \
 	--intrinsic-w-curiosity 0.1 \
 	--intrinsic-w-novelty 0.1 \
 	--intrinsic-w-surprise 0.8 \
-	--backbone "resnet50.fb_swsl_ig1b_ft_in1k" \
+	--backbone "convnext_small.dinov3_lvd1689m" \
 	--secret-stage1-bonus 2 \
 	--secret-stage1-x-min 1886 --secret-stage1-x-max 1944 \
 	--secret-stage2-spin-bonus 0.5 \
 	--secret-stage2-spin-required 2 \
 	--secret-stage2-spin-button A \
-	--secret-stage3-bonus 10 \
-	--log-dir "./runs_IR005" \
+	--secret-stage3-bonus 100 \
+	--log-dir "./runs_IR006" \
 	--device "cuda:0" \
-	>> IR005.log 2>&1
+	>> IR006.log 2>&1
