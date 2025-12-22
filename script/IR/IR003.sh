@@ -41,6 +41,11 @@ python3 src/main.py \
 	--intrinsic-w-novelty 0.1 \
 	--intrinsic-w-surprise 0.8 \
 	--backbone "densenetblur121d.ra_in1k" \
+	--secret-stage1-bonus 2 \
+	--secret-stage1-x-min 1886 --secret-stage1-x-max 1944 \
+	--secret-stage2-spin-bonus 0.5 \
+	--secret-stage2-spin-required 2 \
+	--secret-stage2-spin-button A \
 	--secret-stage3-bonus 10 \
 	--log-dir "./runs_IR003" \
 	--device "cuda:0" \
