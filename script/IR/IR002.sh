@@ -1,10 +1,10 @@
 #!/bin/bash
 #PBS -P rp06
-#PBS -q gpuvolta
+#PBS -q gpuhopper
 #PBS -l ngpus=1            
 #PBS -l ncpus=12            
 #PBS -l mem=32GB           
-#PBS -l walltime=24:00:00  
+#PBS -l walltime=38:00:00  
 #PBS -l wd                  
 #PBS -l storage=scratch/rp06
 
@@ -36,10 +36,12 @@ python3 src/main.py \
 	--record-steps 3000 \
     --reward-scale 0.05 \
 	--intrinsic-enable \
-	--intrinsic-scale 0.1 \
-	--intrinsic-w-curiosity 1.0 \
+	--intrinsic-scale 0.05 \
+	--intrinsic-w-curiosity 0.0 \
 	--intrinsic-w-novelty 0.0 \
-	--intrinsic-w-surprise 0.0 \
+	--intrinsic-w-surprise 1.0 \
+	--backbone "densenetblur121d.ra_in1k" \
+	--secret-stage3-bonus 10 \
 	--log-dir "./runs_IR002" \
 	--device "cuda:0" \
 	>> IR002.log 2>&1

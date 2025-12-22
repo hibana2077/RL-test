@@ -14,12 +14,15 @@ from stable_baselines3.common.torch_layers import BaseFeaturesExtractor
 from stable_baselines3.common.type_aliases import GymEnv, MaybeCallback, Schedule
 from stable_baselines3.common.utils import FloatSchedule, explained_variance
 class VisionBackboneExtractor(BaseFeaturesExtractor):
-    def __init__(self, observation_space: spaces.Box, backbone_name: str = "resnet18"):
+    def __init__(self, observation_space: spaces.Box):
         channels, height, width = observation_space.shape
         # Temporary value, will be updated after backbone is created
         super().__init__(observation_space, features_dim=1)
+        #######################################
+        # Replace "YOUR_MODEL_NAME_HERE" with the desired model from timm
+        #######################################
         self.backbone = timm.create_model(
-            backbone_name,  # e.g. resnet18, convnext_small.dinov3_lvd1689m, convnext_base.clip_laion2b
+            "YOUR_MODEL_NAME_HERE",
             pretrained=True,
             in_chans=channels,
             features_only=True,
@@ -36,49 +39,20 @@ class VisionBackboneExtractor(BaseFeaturesExtractor):
         return pooled
 
 
-class ScalarAttentionEncoder(nn.Module):
-    def __init__(self, input_dim: int, embed_dim: int = 32, num_heads: int = 4, num_layers: int = 2, output_dim: int = 64):
-        super().__init__()
-        self.embed_dim = embed_dim
-        # 將每個 scalar 特徵視為一個 token，投影到 embed_dim
-        self.feature_embedding = nn.Linear(1, embed_dim)
-        
-        encoder_layer = nn.TransformerEncoderLayer(d_model=embed_dim, nhead=num_heads, batch_first=True)
-        self.transformer_encoder = nn.TransformerEncoder(encoder_layer, num_layers=num_layers)
-        
-        self.output_net = nn.Sequential(
-            nn.Flatten(),
-            nn.Linear(input_dim * embed_dim, output_dim),
-            nn.ReLU()
-        )
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        # x shape: (Batch, input_dim)
-        # Reshape to (Batch, input_dim, 1)
-        x = x.unsqueeze(-1)
-        # Embedding: (Batch, input_dim, embed_dim)
-        x = self.feature_embedding(x)
-        # Transformer Encoder
-        x = self.transformer_encoder(x)
-        # Output projection
-        return self.output_net(x)
-
-
 class VisionScalarExtractor(BaseFeaturesExtractor):
-    def __init__(self, observation_space: spaces.Dict, backbone_name: str = "resnet18"):
+    def __init__(self, observation_space: spaces.Dict):
         assert isinstance(observation_space, spaces.Dict), "VisionScalarExtractor expects a Dict observation space"
         image_space = observation_space["image"]
         scalar_space = observation_space["scalars"]
         super().__init__(observation_space, features_dim=1)
-        self.image_extractor = VisionBackboneExtractor(image_space, backbone_name=backbone_name)
+        self.image_extractor = VisionBackboneExtractor(image_space)
         scalar_dim = int(np.prod(scalar_space.shape))
         ######################################
-        # 定義簡單的 MLP 處理 scalar 輸入 (步數、時間等資訊)
-        # 輸入維度: scalar_dim (2: step_feat, time_feat)
-        # 輸出維度: 64，與 image features 拼接
+        # Define a simple MLP for scalar data
         ######################################
-        # 使用 Attention Encoder 處理 scalar 輸入
-        self.scalar_net = ScalarAttentionEncoder(input_dim=scalar_dim, output_dim=64)
+        self.scalar_net = nn.Sequential(
+            ....
+        )
         ######################################
         ######################################
         self._features_dim = self.image_extractor.features_dim + 64
@@ -192,16 +166,8 @@ class CustomPPO(OnPolicyAlgorithm):
         entropy_losses = []
         pg_losses, value_losses = [], []
         clip_fractions = []
-        total_losses = []
-        grad_norms_pre_clip = []
         continue_training = True
         for epoch in range(self.n_epochs):
-            epoch_losses = []
-            epoch_grad_norms = []
-            epoch_pg_losses = []
-            epoch_value_losses = []
-            epoch_entropy_losses = []
-            epoch_clip_fractions = []
             approx_kl_divs = []
             for rollout_data in self.rollout_buffer.get(self.batch_size):
                 actions = rollout_data.actions
@@ -220,30 +186,20 @@ class CustomPPO(OnPolicyAlgorithm):
                 ratio = torch.exp(log_prob - rollout_data.old_log_prob)
                 # clipped surrogate loss
                 ##############################
-                # PPO Clipped Surrogate Loss 實作
-                # 1. 計算 unclipped 的 surrogate: ratio * advantages
-                # 2. 計算 clipped 的 surrogate: clamp(ratio, 1-ε, 1+ε) * advantages
-                # 3. 取兩者較小值，並取負號（因為 optimizer 做 minimize）
+                # YOUR CODE HERE
                 ##############################
-                # Unclipped surrogate objective
-                policy_loss_1 = advantages * ratio
-                # Clipped surrogate objective
-                policy_loss_2 = advantages * torch.clamp(ratio, 1 - self.clip_range, 1 + self.clip_range)
-                # 取較小值並取負號 (gradient ascent -> minimize negative)
-                policy_loss = -torch.min(policy_loss_1, policy_loss_2).mean()
+                # hints: use torch.clamp, torch.min, and negative sign for gradient ascent
+                policy_loss = ...
                 ##############################
                 # Logging
                 pg_losses.append(policy_loss.item())
-                epoch_pg_losses.append(policy_loss.item())
                 clip_fraction = torch.mean((torch.abs(ratio - 1) > self.clip_range).float()).item()
                 clip_fractions.append(clip_fraction)
-                epoch_clip_fractions.append(clip_fraction)
                 values_pred = values
                 
                 # Value loss using the TD(gae_lambda) target
                 value_loss = F.mse_loss(rollout_data.returns, values_pred)
                 value_losses.append(value_loss.item())
-                epoch_value_losses.append(value_loss.item())
                 # Entropy loss favor exploration
                 if entropy is None:
                     # Approximate entropy when no analytical form
@@ -251,93 +207,37 @@ class CustomPPO(OnPolicyAlgorithm):
                 else:
                     entropy_loss = -torch.mean(entropy)
                 entropy_losses.append(entropy_loss.item())
-                epoch_entropy_losses.append(entropy_loss.item())
                 
                 ################################
-                # 計算 KL Divergence 與總損失
-                # KL(old || new) ≈ (old_log_prob - new_log_prob) 的期望值
-                # 當 kl_coef > 0 時，加入 KL penalty 穩定訓練
+                # YOUR CODE HERE
+                # Compute KL divergence between old and new policy
+                # Adding all losses together
                 ################################
                 if self.kl_coef == 0:
-                    # 不使用 KL penalty，直接記錄 KL 用於監控
-                    with torch.no_grad():
-                        log_ratio = log_prob - rollout_data.old_log_prob
-                        approx_kl = torch.mean((torch.exp(log_ratio) - 1) - log_ratio).item()
-                        approx_kl_divs.append(approx_kl)
-                    # Total Loss = Policy Loss + Value Loss * vf_coef + Entropy Loss * ent_coef
-                    loss = policy_loss + self.vf_coef * value_loss + self.ent_coef * entropy_loss
+                    ....
                 else:
-                    # 計算 KL divergence 作為 penalty term
-                    log_ratio = log_prob - rollout_data.old_log_prob
-                    # 使用更穩定的 KL 近似: E[(exp(r) - 1) - r]
-                    approx_kl = torch.mean((torch.exp(log_ratio) - 1) - log_ratio)
-                    approx_kl_divs.append(approx_kl.item())
-                    # Total Loss 加入 KL penalty
-                    loss = policy_loss + self.vf_coef * value_loss + self.ent_coef * entropy_loss + self.kl_coef * approx_kl
+                    ....
+                    
+                loss = ...
                 ################################
                 ################################
                 self.policy.optimizer.zero_grad()
                 loss.backward()
-
-                # === Debug: Gradient norm (pre-clip) ===
-                total_norm = 0.0
-                for p in self.policy.parameters():
-                    if p.grad is not None:
-                        param_norm = p.grad.data.norm(2)
-                        total_norm += param_norm.item() ** 2
-                total_norm = total_norm ** 0.5
-                grad_norms_pre_clip.append(total_norm)
-                epoch_grad_norms.append(total_norm)
-                # ======================================
-
-                total_losses.append(loss.item())
-                epoch_losses.append(loss.item())
-
                 # Clip grad norm
                 torch.nn.utils.clip_grad_norm_(self.policy.parameters(), self.max_grad_norm)
                 self.policy.optimizer.step()
-
-            # Print once per epoch-update (not per minibatch)
-            if self._n_updates % 10 == 0:
-                def _mean(xs):
-                    return float(np.mean(xs)) if len(xs) else 0.0
-
-                print(
-                    "[DEBUG] Update "
-                    f"{self._n_updates} | "
-                    f"Loss(mean)={_mean(epoch_losses):.4f} | "
-                    f"PG={_mean(epoch_pg_losses):.4f} | "
-                    f"VF={_mean(epoch_value_losses):.4f} | "
-                    f"Ent={_mean(epoch_entropy_losses):.4f} | "
-                    f"KL={_mean(approx_kl_divs):.6f} | "
-                    f"ClipFrac={_mean(epoch_clip_fractions):.3f} | "
-                    f"GradNorm(preclip,mean)={_mean(epoch_grad_norms):.4f}"
-                )
 
             self._n_updates += 1
             if not continue_training:
                 break
         explained_variance_ = explained_variance(self.rollout_buffer.values.flatten(), self.rollout_buffer.returns.flatten())
-
-        # Scale diagnostics (helps interpret big value loss/loss)
-        returns = self.rollout_buffer.returns.flatten()
-        values_buf = self.rollout_buffer.values.flatten()
-        advantages_buf = self.rollout_buffer.advantages.flatten()
-
-        self.logger.record("train/returns_mean", float(np.mean(returns)))
-        self.logger.record("train/returns_std", float(np.std(returns)))
-        self.logger.record("train/values_mean", float(np.mean(values_buf)))
-        self.logger.record("train/values_std", float(np.std(values_buf)))
-        self.logger.record("train/advantages_mean", float(np.mean(advantages_buf)))
-        self.logger.record("train/advantages_std", float(np.std(advantages_buf)))
-        self.logger.record("train/grad_norm_pre_clip", float(np.mean(grad_norms_pre_clip)) if len(grad_norms_pre_clip) else 0.0)
         # Logs
         self.logger.record("train/entropy_loss", np.mean(entropy_losses))
         self.logger.record("train/policy_gradient_loss", np.mean(pg_losses))
         self.logger.record("train/value_loss", np.mean(value_losses))
         self.logger.record("train/approx_kl", np.mean(approx_kl_divs))
         self.logger.record("train/clip_fraction", np.mean(clip_fractions))
-        self.logger.record("train/loss", float(np.mean(total_losses)) if len(total_losses) else float(loss.item()))
+        self.logger.record("train/loss", loss.item())
         self.logger.record("train/explained_variance", explained_variance_)
         if hasattr(self.policy, "log_std"):
             self.logger.record("train/std", torch.exp(self.policy.log_std).mean().item())
