@@ -1,8 +1,8 @@
 #!/bin/bash
 #PBS -P kf09
-#PBS -q dgxa100
+#PBS -q gpuhopper
 #PBS -l ngpus=1            
-#PBS -l ncpus=16            
+#PBS -l ncpus=12            
 #PBS -l mem=32GB           
 #PBS -l walltime=38:00:00  
 #PBS -l wd                  
@@ -47,6 +47,6 @@ python3 src/main.py \
 	--secret-stage2-spin-required 2 \
 	--secret-stage2-spin-button A \
 	--secret-stage3-bonus 100 \
-	--log-dir "./runs_IR008" \
+	--log-dir "./runs_IR009" \
 	--device "cuda:0" \
-	>> IR008.log 2>&1
+	>> IR009.log 2>&1
