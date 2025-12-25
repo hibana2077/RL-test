@@ -211,3 +211,7 @@ __marimo__/
 *.DS_Store
 *.zip
 submit/*
+figure_3_dataset_granularity_distribution.png
+research_trends.png
+temp.py
+temp2.py

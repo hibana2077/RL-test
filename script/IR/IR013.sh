@@ -31,7 +31,7 @@ python3 src/main.py \
 	--kl-coef 0.01 \
 	--ent-coef 0.01 \
 	--clip-range 0.3 \
-	--eval-episodes 2 \
+	--eval-episodes 3 \
 	--eval-max-steps 6000 \
 	--record-steps 6000 \
     --reward-scale 0.05 \
