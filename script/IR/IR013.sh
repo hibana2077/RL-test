@@ -1,6 +1,6 @@
 #!/bin/bash
 #PBS -P rp06
-#PBS -q gpuhopper
+#PBS -q gpuvolta
 #PBS -l ngpus=1            
 #PBS -l ncpus=12            
 #PBS -l mem=32GB           
@@ -32,8 +32,8 @@ python3 src/main.py \
 	--ent-coef 0.01 \
 	--clip-range 0.3 \
 	--eval-episodes 3 \
-	--eval-max-steps 6000 \
-	--record-steps 6000 \
+	--eval-max-steps 18000 \
+	--record-steps 18000 \
     --reward-scale 0.05 \
 	--intrinsic-enable \
 	--intrinsic-scale 0.05 \
