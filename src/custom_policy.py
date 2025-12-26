@@ -70,7 +70,15 @@ class ScalarAttentionEncoder(nn.Module):
 
 
 class VisionScalarExtractor(BaseFeaturesExtractor):
-    def __init__(self, observation_space: spaces.Dict, backbone_name: str = "resnet18"):
+    def __init__(
+        self,
+        observation_space: spaces.Dict,
+        backbone_name: str = "resnet18",
+        scalar_embed_dim: int = 32,
+        scalar_num_heads: int = 4,
+        scalar_num_layers: int = 2,
+        scalar_output_dim: int = 64,
+    ):
         assert isinstance(observation_space, spaces.Dict), "VisionScalarExtractor expects a Dict observation space"
         image_space = observation_space["image"]
         scalar_space = observation_space["scalars"]
@@ -79,9 +87,15 @@ class VisionScalarExtractor(BaseFeaturesExtractor):
         scalar_dim = int(np.prod(scalar_space.shape))
 
         # Attention encoder for scalar inputs
-        self.scalar_net = ScalarAttentionEncoder(input_dim=scalar_dim, output_dim=64)
+        self.scalar_net = ScalarAttentionEncoder(
+            input_dim=scalar_dim,
+            embed_dim=scalar_embed_dim,
+            num_heads=scalar_num_heads,
+            num_layers=scalar_num_layers,
+            output_dim=scalar_output_dim,
+        )
 
-        self._features_dim = self.image_extractor.features_dim + 64
+        self._features_dim = self.image_extractor.features_dim + scalar_output_dim
 
     def forward(self, observations: dict[str, torch.Tensor]) -> torch.Tensor:
         image_feats = self.image_extractor(observations["image"])

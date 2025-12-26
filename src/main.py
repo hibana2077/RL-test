@@ -68,6 +68,32 @@ def parse_args() -> argparse.Namespace:
         help="timm backbone model name for VisionBackboneExtractor (default: resnet18)",
     )
 
+    # Scalar attention encoder size (makes the model wider/deeper)
+    parser.add_argument(
+        "--scalar-embed-dim",
+        type=int,
+        default=32,
+        help="ScalarAttentionEncoder token embed dim (default: 32)",
+    )
+    parser.add_argument(
+        "--scalar-heads",
+        type=int,
+        default=4,
+        help="ScalarAttentionEncoder num_heads (must divide scalar-embed-dim; default: 4)",
+    )
+    parser.add_argument(
+        "--scalar-layers",
+        type=int,
+        default=2,
+        help="ScalarAttentionEncoder num_layers (default: 2)",
+    )
+    parser.add_argument(
+        "--scalar-out-dim",
+        type=int,
+        default=64,
+        help="ScalarAttentionEncoder output dim (default: 64)",
+    )
+
     # Reward scaling
     parser.add_argument(
         "--reward-scale",
@@ -207,6 +233,10 @@ print(f"★ N_STEPS = {N_STEPS} | BATCH_SIZE = {BATCH_SIZE} | N_EPOCHS = {N_EPOC
 print(f"★ LEARNING_RATE = {LEARNING_RATE} | CLIP_RANGE = {CLIP_RANGE}")
 print(f"★ DEVICE = {ARGS.device}")
 print(f"★ BACKBONE = {ARGS.backbone}")
+print(
+    f"★ SCALAR_ENCODER = embed={ARGS.scalar_embed_dim}, heads={ARGS.scalar_heads}, "
+    f"layers={ARGS.scalar_layers}, out={ARGS.scalar_out_dim}"
+)
 print("=" * 60)
 
 # 由於 retro 限制每個進程只能有一個環境實例
@@ -313,7 +343,13 @@ model = CustomPPO(
     train_env,
     policy_kwargs=dict(
         normalize_images=False,
-        features_extractor_kwargs=dict(backbone_name=ARGS.backbone),
+        features_extractor_kwargs=dict(
+            backbone_name=ARGS.backbone,
+            scalar_embed_dim=ARGS.scalar_embed_dim,
+            scalar_num_heads=ARGS.scalar_heads,
+            scalar_num_layers=ARGS.scalar_layers,
+            scalar_output_dim=ARGS.scalar_out_dim,
+        ),
     ),
     n_epochs=N_EPOCHS,
     n_steps=N_STEPS,
