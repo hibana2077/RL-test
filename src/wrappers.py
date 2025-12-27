@@ -433,23 +433,25 @@ class AuxObservationWrapper(gym.Wrapper):
 
 
 class RewardOverrideWrapper(gym.Wrapper):
-    """Reward shaping + optional secret shaping.
+    """Reward shaping (delta-based) compatible with current pipeline.
 
-    Baseline reward:
-      r = v + c + d
+    Baseline (from user spec):
+    - positive x progress: 0.03 * max(0, x_pos - prev_x_pos)
+    - positive score gain: 0.35 * max(0, score - prev_score)
+    - positive coin gain: 12.0 * max(0, coins - prev_coins)
+    - death: -25.0
 
-    - v = x1 - x0 (horizontal progress)
-    - c = time_left_t-1 - time_left_t (time bonus)
-    - d = death penalty on death step
-
-    Then clip to [-15, 15] and multiply by reward_scale.
+    Notes:
+    - Keeps the broader __init__ signature so existing calls remain compatible.
+    - Ignores all "secret_*" parameters (accepted for backward-compat).
     """
 
     def __init__(
         self,
         env,
         reward_scale: float = 1.0,
-        death_penalty: float = -15.0,
+        death_penalty: float = -25.0,
+        # accepted for backward compatibility; not used in this simpler shaping
         secret_bonus: float = 0.0,
         secret_x_min: Optional[float] = None,
         secret_x_max: Optional[float] = None,
@@ -473,162 +475,82 @@ class RewardOverrideWrapper(gym.Wrapper):
         self.reward_scale = float(reward_scale)
         self.death_penalty = float(death_penalty)
 
-        self.secret_bonus = float(secret_bonus)
-        self.secret_x_min = None if secret_x_min is None else float(secret_x_min)
-        self.secret_x_max = None if secret_x_max is None else float(secret_x_max)
-        self.secret_y_delta = None if secret_y_delta is None else float(secret_y_delta)
-        if secret_y_mode not in {"down", "up", "any"}:
-            raise ValueError("secret_y_mode must be one of: 'down', 'up', 'any'")
-        self.secret_y_mode = str(secret_y_mode)
-
-        self.secret_stage1_bonus = float(secret_stage1_bonus)
-        self.secret_stage1_x_min = None if secret_stage1_x_min is None else float(secret_stage1_x_min)
-        self.secret_stage1_x_max = None if secret_stage1_x_max is None else float(secret_stage1_x_max)
-        self.secret_stage1_y_raw_min = None if secret_stage1_y_raw_min is None else int(secret_stage1_y_raw_min)
-        self.secret_stage1_y_raw_max = None if secret_stage1_y_raw_max is None else int(secret_stage1_y_raw_max)
-
-        self.secret_stage2_spin_bonus = float(secret_stage2_spin_bonus)
-        self.secret_stage2_spin_button = str(secret_stage2_spin_button)
-        self.secret_stage2_spin_required = max(0, int(secret_stage2_spin_required))
-
-        self.secret_stage3_bonus = float(secret_stage3_bonus)
-        self.secret_stage3_x_min = None if secret_stage3_x_min is None else float(secret_stage3_x_min)
-        self.secret_stage3_x_max = None if secret_stage3_x_max is None else float(secret_stage3_x_max)
-        self.secret_stage3_y_delta = None if secret_stage3_y_delta is None else float(secret_stage3_y_delta)
-        if secret_stage3_y_mode not in {"down", "up", "any"}:
-            raise ValueError("secret_stage3_y_mode must be one of: 'down', 'up', 'any'")
-        self.secret_stage3_y_mode = str(secret_stage3_y_mode)
-
-        self._secret_stage1_done = False
-        self._secret_stage2_count = 0
-        self._secret_stage3_done = False
-        self._secret_given = False
-        self._prev_x_pos: Optional[float] = None
-        self._prev_time_left: Optional[float] = None
+        self._prev_score: Optional[float] = None
+        self._prev_x: Optional[float] = None
+        self._prev_coins: Optional[float] = None
 
     def _reset_trackers(self, info: dict[str, Any]):
-        x_pos = info.get("x_pos", None)
-        time_left = info.get("time_left", None)
-        self._prev_x_pos = float(x_pos) if x_pos is not None else None
-        self._prev_time_left = float(time_left) if time_left is not None else None
+        def _f(key: str) -> float:
+            v = info.get(key, 0.0)
+            try:
+                return float(v)
+            except Exception:
+                return 0.0
+
+        self._prev_score = _f("score")
+        self._prev_x = _f("x_pos")
+        self._prev_coins = _f("coins")
 
     def reset(self, **kwargs):
         obs, info = self.env.reset(**kwargs)
         if not isinstance(info, dict):
             info = {}
         self._reset_trackers(info)
-        self._secret_given = False
-        self._secret_stage1_done = False
-        self._secret_stage2_count = 0
-        self._secret_stage3_done = False
         return obs, info
 
-    def _in_range(self, v: float, vmin: Optional[float], vmax: Optional[float]) -> bool:
-        if vmin is not None and v < vmin:
-            return False
-        if vmax is not None and v > vmax:
-            return False
-        return True
-
-    def _y_delta_ok(self, y_delta: float, thr: float, mode: str) -> bool:
-        if mode == "down":
-            return y_delta >= thr
-        if mode == "up":
-            return y_delta <= -thr
-        return abs(y_delta) >= thr
-
-    def _action_has_button(self, action: Any, button: str) -> bool:
-        # Best-effort: reach into DiscreteActionWrapper if present
-        combos = getattr(self.env, "combos", None)
-        if combos is None:
-            combos = getattr(getattr(self.env, "unwrapped", None), "combos", None)
-        try:
-            idx = int(action)
-        except Exception:
-            return False
-        if isinstance(combos, list) and 0 <= idx < len(combos):
-            return button in combos[idx]
-        return False
-
     def step(self, action):
-        obs, env_reward, terminated, truncated, info = self.env.step(action)
+        obs, _env_reward, terminated, truncated, info = self.env.step(action)
         if not isinstance(info, dict):
             info = {}
 
         reward = 0.0
 
-        # v = x1 - x0
-        x_pos = info.get("x_pos", None)
-        if x_pos is not None:
+        # x progress
+        x_pos = info.get("x_pos", 0.0)
+        try:
             x_pos_f = float(x_pos)
-            if self._prev_x_pos is not None:
-                reward += x_pos_f - self._prev_x_pos
-            self._prev_x_pos = x_pos_f
+        except Exception:
+            x_pos_f = 0.0
+        if self._prev_x is not None:
+            x_delta = x_pos_f - self._prev_x
+            if x_delta > 0.0:
+                reward += x_delta * 0.03
+        self._prev_x = x_pos_f
 
-        # c = time_left0 - time_left1
-        time_left = info.get("time_left", None)
-        if time_left is not None:
-            time_left_f = float(time_left)
-            if self._prev_time_left is not None:
-                reward += self._prev_time_left - time_left_f
-            self._prev_time_left = time_left_f
+        # score gain
+        score = info.get("score", 0.0)
+        try:
+            score_f = float(score)
+        except Exception:
+            score_f = 0.0
+        if self._prev_score is not None:
+            score_delta = score_f - self._prev_score
+            if score_delta > 0.0:
+                reward += score_delta * 0.35
+        self._prev_score = score_f
 
-        # d = death penalty
+        # coin gain
+        coins = info.get("coins", 0.0)
+        try:
+            coins_f = float(coins)
+        except Exception:
+            coins_f = 0.0
+        if self._prev_coins is not None:
+            coin_delta = coins_f - self._prev_coins
+            if coin_delta > 0.0:
+                reward += coin_delta * 12.0
+        self._prev_coins = coins_f
+
+        # death penalty
         if bool(info.get("death", False)):
             reward += self.death_penalty
 
-        # staged secret shaping
-        if not self._secret_stage1_done and self.secret_stage1_bonus != 0.0:
-            y_raw = info.get("y_pos_raw", None)
-            x = info.get("x_pos", None)
-            if x is not None and y_raw is not None:
-                if self._in_range(float(x), self.secret_stage1_x_min, self.secret_stage1_x_max):
-                    y_ok = True
-                    if self.secret_stage1_y_raw_min is not None and int(y_raw) < self.secret_stage1_y_raw_min:
-                        y_ok = False
-                    if self.secret_stage1_y_raw_max is not None and int(y_raw) > self.secret_stage1_y_raw_max:
-                        y_ok = False
-                    if y_ok:
-                        reward += self.secret_stage1_bonus
-                        self._secret_stage1_done = True
-
-        if self._secret_stage1_done and not self._secret_stage3_done and self.secret_stage2_spin_bonus != 0.0:
-            if self._secret_stage2_count < self.secret_stage2_spin_required:
-                if self._action_has_button(action, self.secret_stage2_spin_button):
-                    reward += self.secret_stage2_spin_bonus
-                    self._secret_stage2_count += 1
-
-        if not self._secret_stage3_done and self.secret_stage3_bonus != 0.0:
-            x = info.get("x_pos", None)
-            y_delta = info.get("y_pos_delta", None)
-            if x is not None and y_delta is not None and self.secret_stage3_y_delta is not None:
-                if self._in_range(float(x), self.secret_stage3_x_min, self.secret_stage3_x_max) and self._y_delta_ok(
-                    float(y_delta), self.secret_stage3_y_delta, self.secret_stage3_y_mode
-                ):
-                    reward += self.secret_stage3_bonus
-                    self._secret_stage3_done = True
-
-        # legacy secret bonus (one-time)
-        if not self._secret_given and self.secret_bonus != 0.0:
-            x = info.get("x_pos", None)
-            y_delta = info.get("y_pos_delta", None)
-            if (
-                x is not None
-                and y_delta is not None
-                and self.secret_y_delta is not None
-                and self._in_range(float(x), self.secret_x_min, self.secret_x_max)
-                and self._y_delta_ok(float(y_delta), self.secret_y_delta, self.secret_y_mode)
-            ):
-                reward += self.secret_bonus
-                self._secret_given = True
-
-        reward = float(np.clip(reward, -15.0, 15.0))
         reward *= self.reward_scale
 
         if terminated or truncated:
             self._reset_trackers(info)
 
-        return obs, reward, terminated, truncated, info
+        return obs, float(reward), terminated, truncated, info
 
 
 class IntrinsicRewardWrapper(gym.Wrapper):
